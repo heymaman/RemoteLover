@@ -4,7 +4,7 @@ Automatically monitors **25+ top tech company** career pages and sends real-time
 
 ---
 
-## 📋 Companies Tracked
+##  Companies Tracked
 
 | Category | Companies |
 |---|---|
@@ -17,7 +17,7 @@ Automatically monitors **25+ top tech company** career pages and sends real-time
 
 ---
 
-## 🚀 Setup (5–10 minutes)
+##  Setup (5–10 minutes)
 
 ### Step 1 — Fork this repo
 
@@ -75,7 +75,7 @@ Then click **"Job Tracker Bot"** → **"Run workflow"** to test it manually!
 
 ---
 
-## ⏰ Schedule
+##  Schedule
 
 The bot runs **every 2 hours** by default. To change it, edit the cron in `.github/workflows/job-tracker.yml`:
 
@@ -89,7 +89,7 @@ The bot runs **every 2 hours** by default. To change it, edit the cron in `.gith
 
 ---
 
-## ➕ Adding Companies
+##  Adding Companies
 
 **Greenhouse** (most common — Figma, Notion, Linear, etc.):
 ```python
@@ -105,7 +105,7 @@ To find the company slug, visit their jobs page — it's usually in the URL (e.g
 
 ---
 
-## 🗂️ Project Structure
+##  Project Structure
 
 ```
 job-tracker/
@@ -121,7 +121,7 @@ job-tracker/
 
 ---
 
-## 🛠 Local Testing
+##  Local Testing
 
 ```bash
 pip install requests
@@ -135,7 +135,7 @@ python scripts/scraper.py
 
 ---
 
-## ❓ FAQ
+##  FAQ
 
 **Why is `seen_jobs.json` in a GitHub Actions cache and not committed?**
 Because GitHub Actions cache is ephemeral-but-persistent: it survives between runs but doesn't pollute your git history with JSON changes every 2 hours.
