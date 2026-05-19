@@ -373,10 +373,21 @@ def save_seen(seen):
 KEYWORDS = os.getenv("JOB_KEYWORDS", "software engineer,swe,internship,intern,graduate,entry level,new grad").lower().split(",")
 KEYWORDS = [k.strip() for k in KEYWORDS if k.strip()]
 
+# Exclude senior/staff positions
+EXCLUDE_KEYWORDS = ["senior", "staff", "lead", "principal", "director", "manager", "architect"]
+
 def matches_filter(job):
     if not KEYWORDS:
         return True
+    
     text = (job["title"] + " " + job.get("location", "")).lower()
+    
+    # Check if any excluded keyword is in the title
+    for exclude_kw in EXCLUDE_KEYWORDS:
+        if exclude_kw in text:
+            return False
+    
+    # Check if at least one include keyword matches
     return any(kw in text for kw in KEYWORDS)
 
 

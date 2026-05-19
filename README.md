@@ -64,15 +64,19 @@ Add the secrets for whichever channels you want:
 
 ### Step 3 - (Optional) Set keyword filters
 
-Add a secret called `JOB_KEYWORDS` with comma-separated keywords. **Default keywords** (if left empty) filter for SWE internships:
+The bot comes with **default keywords optimized for SWE internships** (if `JOB_KEYWORDS` is not set):
 
 ```
-software engineer,swe,internship,intern,graduate,entry level,new grad
+software engineer, swe, internship, intern, graduate, entry level, new grad
 ```
 
-Custom example for backend roles:
+**Automatic Exclusions** (to avoid senior roles):
+-  senior, staff, lead, principal, director, manager, architect
+
+To customize, add a secret called `JOB_KEYWORDS` with comma-separated keywords:
+
 ```
-backend,python,golang,rust,infrastructure
+backend engineer,python,golang,infrastructure
 ```
 
 Leave it empty to receive all new job postings.
