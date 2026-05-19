@@ -4,14 +4,19 @@ Automatically monitors **25+ top tech company** career pages and sends real-time
 
 ---
 
-##  Companies Tracked
+##  Companies Tracked (25+ tech companies with strong internship programs)
 
 | Category | Companies |
 |---|---|
-| Big Tech | Google, Apple, Meta, Microsoft, Amazon, Netflix |
-| AI Labs | Anthropic, OpenAI, DeepMind, Mistral AI, Perplexity, Cursor |
-| Developer Tools | Stripe, Vercel, Figma, Notion, Linear, Supabase, Dropbox |
-| Others | Airbnb, Spotify, Twilio, Coinbase |
+| Big Tech | Amazon, Uber, Lyft, Shopify, Discord |
+| AI Labs | Anthropic, DeepMind |
+| Developer Tools | Stripe, Airbnb, Dropbox, Figma, Vercel, Spotify |
+| Trading & Finance | Jane Street, Jump Trading, Citadel |
+| Data & Infrastructure | Databricks, Scale AI, Roblox |
+| Fintech & Education | Brex, Coursera |
+| Startups & Others | Guidepoint, Amplitude, Notion, Linear, Supabase |
+
+> **Note:** Google, Apple, Meta, and Netflix have JavaScript-heavy sites that block scraping. For these companies, use LinkedIn Job Search or Indeed APIs as an alternative (see "Adding Companies" section).
 
 > **Want more?** Add any Greenhouse/Lever/Ashby company in `scripts/scraper.py` in under 2 lines , see the "Adding Companies" section below.
 
@@ -59,10 +64,15 @@ Add the secrets for whichever channels you want:
 
 ### Step 3 - (Optional) Set keyword filters
 
-Add a secret called `JOB_KEYWORDS` with comma-separated keywords to only get relevant roles:
+Add a secret called `JOB_KEYWORDS` with comma-separated keywords. **Default keywords** (if left empty) filter for SWE internships:
 
 ```
-engineer,ml,python,backend
+software engineer,swe,internship,intern,graduate,entry level,new grad
+```
+
+Custom example for backend roles:
+```
+backend,python,golang,rust,infrastructure
 ```
 
 Leave it empty to receive all new job postings.

@@ -21,46 +21,37 @@ log = logging.getLogger(__name__)
 # Each entry: name, api_url or scrape_url, parser_type
 # ─────────────────────────────────────────────
 COMPANIES = [
-    # ── Big Tech ──
-    {
-        "name": "Google",
-        "url": "https://careers.google.com/api/v3/search/?page_size=20&sort_by=date",
-        "type": "google",
-    },
-    {
-        "name": "Apple",
-        "url": "https://jobs.apple.com/api/role/search?page=1&pageSize=20&sort=newest",
-        "type": "apple",
-    },
-    {
-        "name": "Meta",
-        "url": "https://www.metacareers.com/graphql",
-        "type": "meta",
-    },
-    {
-        "name": "Microsoft",
-        "url": "https://gcsservices.careers.microsoft.com/search/api/v1/search?pg=1&pgSz=20&so=Relevance",
-        "type": "microsoft",
-    },
+    # ── Working Big Tech (Tier-1 Companies) ──
     {
         "name": "Amazon",
-        "url": "https://www.amazon.jobs/en/search.json?country=&city=&region=&county=&query=&query_options=&normalized_country_code=&normalized_city_name=&normalized_state_name=&normalized_county_name=&offset=0&result_limit=20&sort=recent",
+        "url": "https://www.amazon.jobs/en/search.json?country=&city=&region=&county=&query=&query_options=&normalized_country_code=&normalized_city_name=&normalized_state_name=&normalized_county_name=&offset=0&result_limit=50&sort=recent",
         "type": "amazon",
     },
+    # ── Tier-1 Tech Companies (Greenhouse - Most have internship programs) ──
     {
-        "name": "Netflix",
-        "url": "https://jobs.netflix.com/api/search?page=1",
-        "type": "netflix",
-    },
-    # ── AI / Anthropic ──
-    {
-        "name": "Anthropic",
-        "url": "https://boards-api.greenhouse.io/v1/boards/anthropic/jobs?content=true",
+        "name": "Uber",
+        "url": "https://boards-api.greenhouse.io/v1/boards/uberatg/jobs?content=true",
         "type": "greenhouse",
     },
     {
-        "name": "OpenAI",
-        "url": "https://boards-api.greenhouse.io/v1/boards/openai/jobs?content=true",
+        "name": "Lyft",
+        "url": "https://boards-api.greenhouse.io/v1/boards/lyft/jobs?content=true",
+        "type": "greenhouse",
+    },
+    {
+        "name": "Discord",
+        "url": "https://boards-api.greenhouse.io/v1/boards/discord/jobs?content=true",
+        "type": "greenhouse",
+    },
+    {
+        "name": "Shopify",
+        "url": "https://boards-api.greenhouse.io/v1/boards/shopify/jobs?content=true",
+        "type": "greenhouse",
+    },
+    # ── AI Labs (Greenhouse) ──
+    {
+        "name": "Anthropic",
+        "url": "https://boards-api.greenhouse.io/v1/boards/anthropic/jobs?content=true",
         "type": "greenhouse",
     },
     {
@@ -68,12 +59,7 @@ COMPANIES = [
         "url": "https://boards-api.greenhouse.io/v1/boards/deepmind/jobs?content=true",
         "type": "greenhouse",
     },
-    {
-        "name": "Mistral AI",
-        "url": "https://boards-api.greenhouse.io/v1/boards/mistral/jobs?content=true",
-        "type": "greenhouse",
-    },
-    # ── Greenhouse-powered companies ──
+    # ── Developer Tools & Startups (Greenhouse) ──
     {
         "name": "Stripe",
         "url": "https://boards-api.greenhouse.io/v1/boards/stripe/jobs?content=true",
@@ -95,13 +81,73 @@ COMPANIES = [
         "type": "greenhouse",
     },
     {
-        "name": "Notion",
-        "url": "https://boards-api.greenhouse.io/v1/boards/notion/jobs?content=true",
+        "name": "Vercel",
+        "url": "https://boards-api.greenhouse.io/v1/boards/vercel/jobs?content=true",
         "type": "greenhouse",
     },
     {
-        "name": "Vercel",
-        "url": "https://boards-api.greenhouse.io/v1/boards/vercel/jobs?content=true",
+        "name": "Spotify",
+        "url": "https://api.lever.co/v0/postings/spotify?mode=json&limit=100",
+        "type": "lever",
+    },
+    # ── Trading & Finance Firms (Heavy on Internships) ──
+    {
+        "name": "Jane Street",
+        "url": "https://boards-api.greenhouse.io/v1/boards/janestreet/jobs?content=true",
+        "type": "greenhouse",
+    },
+    {
+        "name": "Jump Trading",
+        "url": "https://boards-api.greenhouse.io/v1/boards/jumptrading/jobs?content=true",
+        "type": "greenhouse",
+    },
+    {
+        "name": "Citadel",
+        "url": "https://boards-api.greenhouse.io/v1/boards/citadel/jobs?content=true",
+        "type": "greenhouse",
+    },
+    # ── Gaming & Platforms ──
+    {
+        "name": "Roblox",
+        "url": "https://boards-api.greenhouse.io/v1/boards/roblox/jobs?content=true",
+        "type": "greenhouse",
+    },
+    # ── Data & Infrastructure ──
+    {
+        "name": "Databricks",
+        "url": "https://boards-api.greenhouse.io/v1/boards/databricks/jobs?content=true",
+        "type": "greenhouse",
+    },
+    {
+        "name": "Scale AI",
+        "url": "https://boards-api.greenhouse.io/v1/boards/scaleai/jobs?content=true",
+        "type": "greenhouse",
+    },
+    # ── Fintech & Enterprise ──
+    {
+        "name": "Brex",
+        "url": "https://boards-api.greenhouse.io/v1/boards/brex/jobs?content=true",
+        "type": "greenhouse",
+    },
+    {
+        "name": "Coursera",
+        "url": "https://boards-api.greenhouse.io/v1/boards/coursera/jobs?content=true",
+        "type": "greenhouse",
+    },
+    # ── Additional Strong Companies ──
+    {
+        "name": "Guidepoint",
+        "url": "https://boards-api.greenhouse.io/v1/boards/guidepoint/jobs?content=true",
+        "type": "greenhouse",
+    },
+    {
+        "name": "Amplitude",
+        "url": "https://boards-api.greenhouse.io/v1/boards/amplitude/jobs?content=true",
+        "type": "greenhouse",
+    },
+    {
+        "name": "Notion",
+        "url": "https://boards-api.greenhouse.io/v1/boards/notion/jobs?content=true",
         "type": "greenhouse",
     },
     {
@@ -109,37 +155,10 @@ COMPANIES = [
         "url": "https://boards-api.greenhouse.io/v1/boards/linear/jobs?content=true",
         "type": "greenhouse",
     },
-    # ── Lever-powered companies ──
-    {
-        "name": "Spotify",
-        "url": "https://api.lever.co/v0/postings/spotify?mode=json&limit=20",
-        "type": "lever",
-    },
-    {
-        "name": "Twilio",
-        "url": "https://api.lever.co/v0/postings/twilio?mode=json&limit=20",
-        "type": "lever",
-    },
-    {
-        "name": "Coinbase",
-        "url": "https://api.lever.co/v0/postings/coinbase?mode=json&limit=20",
-        "type": "lever",
-    },
-    # ── Ashby-powered companies ──
-    {
-        "name": "Perplexity AI",
-        "url": "https://jobs.ashbyhq.com/api/non-user-facing/job-board/perplexity/posting-groups",
-        "type": "ashby",
-    },
-    {
-        "name": "Cursor",
-        "url": "https://jobs.ashbyhq.com/api/non-user-facing/job-board/cursor/posting-groups",
-        "type": "ashby",
-    },
     {
         "name": "Supabase",
-        "url": "https://jobs.ashbyhq.com/api/non-user-facing/job-board/supabase/posting-groups",
-        "type": "ashby",
+        "url": "https://boards-api.greenhouse.io/v1/boards/supabase/jobs?content=true",
+        "type": "greenhouse",
     },
 ]
 
@@ -351,7 +370,7 @@ def save_seen(seen):
 # KEYWORD FILTERING
 # ─────────────────────────────────────────────
 
-KEYWORDS = os.getenv("JOB_KEYWORDS", "").lower().split(",")
+KEYWORDS = os.getenv("JOB_KEYWORDS", "software engineer,swe,internship,intern,graduate,entry level,new grad").lower().split(",")
 KEYWORDS = [k.strip() for k in KEYWORDS if k.strip()]
 
 def matches_filter(job):
