@@ -376,11 +376,11 @@ KEYWORDS = [k.strip() for k in KEYWORDS if k.strip()]
 # Software/Engineering keywords required
 SOFTWARE_KEYWORDS = ["software engineer", "swe", "developer", "backend", "frontend", "fullstack", "full stack", "engineer"]
 
-# Entry-level indicators
-ENTRY_KEYWORDS = ["internship", "intern", "new grad", "entry level", "graduate", "fresh", "no experience", "early career"]
+# Internship-specific keywords (REQUIRED)
+INTERNSHIP_KEYWORDS = ["internship", "intern", "summer", "coop", "co-op", "graduate program"]
 
 # Exclude senior/staff/non-SWE positions
-EXCLUDE_KEYWORDS = ["senior", "staff", "lead", "principal", "director", "manager", "architect", "devops", "data scientist", "machine learning", "ml engineer", "design", "ux", "ui", "product", "marketing", "sales", "hr", "finance", "accounting", "operations", "qa", "test"]
+EXCLUDE_KEYWORDS = ["senior", "staff", "lead", "principal", "director", "manager", "architect", "devops", "data scientist", "machine learning", "ml engineer", "design", "ux", "ui", "product", "marketing", "sales", "hr", "finance", "accounting", "operations", "qa", "test", "business"]
 
 def matches_filter(job):
     text = (job["title"] + " " + job.get("location", "")).lower()
@@ -392,22 +392,21 @@ def matches_filter(job):
                 return False
         return any(kw in text for kw in KEYWORDS)
     
-    # Default: SWE internships & entry-level only
-    has_software_kw = any(kw in text for kw in SOFTWARE_KEYWORDS)
+    # Default: INTERNSHIPS ONLY
+    # Must have an internship keyword
+    has_internship_kw = any(kw in text for kw in INTERNSHIP_KEYWORDS)
+    if not has_internship_kw:
+        return False
     
-    # Check for excluded keywords first
+    # Check for excluded keywords
     for exclude_kw in EXCLUDE_KEYWORDS:
         if exclude_kw in text:
             return False
     
     # Must have a software keyword
-    if not has_software_kw:
-        return False
+    has_software_kw = any(kw in text for kw in SOFTWARE_KEYWORDS)
     
-    # Must be entry-level
-    has_entry_kw = any(kw in text for kw in ENTRY_KEYWORDS)
-    
-    return has_entry_kw
+    return has_software_kw
 
 
 # ─────────────────────────────────────────────
