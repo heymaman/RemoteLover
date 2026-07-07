@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
 """
-Remote Lover v19.0 – ULTIMATE (COMPLETE)
+Remote Lover v19.1
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-All fetchers implemented, source discovery added, email digest ready.
+• 17+ sources (RemoteOK, Remotive, Himalayas, WeWorkRemotely, JobSpy,
+  Greenhouse, X, Reddit, HN, GitHub, Reddit Tasks, Google Search, YC,
+  Wellfound, auto‑discovered)
+• Self‑expanding source discovery
+• Scoring: remote, recency, easy roles, global‑friendly boost,
+  geo‑restricted penalty
+• Semantic scoring (optional)
+• Email digest (optional)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
-import os
-import json
-import sqlite3
-import logging
+import os, json, sqlite3, logging, sys, re, random, hashlib, time, requests
 from logging.handlers import RotatingFileHandler
-import requests
-import time
-import sys
-import re
-import random
-import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Any
@@ -82,7 +80,6 @@ if CONFIG_FILE.exists():
     except:
         pass
 
-# Environment overrides
 for key in ["MAX_RETRIES", "TIMEOUT_SECONDS", "GHOST_THRESHOLD", "SCAM_THRESHOLD", "MAX_AGE_DAYS", "MAX_RESULTS_PER_SOURCE"]:
     if os.getenv(key):
         config[key.lower()] = int(os.getenv(key))
@@ -147,6 +144,7 @@ def init_db():
             salary_max INTEGER,
             salary_text TEXT,
             saved BOOLEAN DEFAULT 0,
+            content TEXT,
             seen_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -186,7 +184,10 @@ def init_db():
             failure_count INTEGER DEFAULT 0
         )
     """)
+    # Migration: ensure content and saved columns exist
     cols = get_columns(conn, "jobs")
+    if "content" not in cols:
+        c.execute("ALTER TABLE jobs ADD COLUMN content TEXT")
     if "saved" not in cols:
         c.execute("ALTER TABLE jobs ADD COLUMN saved BOOLEAN DEFAULT 0")
     conn.commit()
@@ -229,7 +230,7 @@ def normalize_salary(salary_data):
             result["min"] = int(nums[0])
     return result
 
-# ─── SEMANTIC SCORING ───
+# ─── SEMANTIC SCORING (optional) ───
 try:
     from sentence_transformers import SentenceTransformer
     import numpy as np
@@ -258,7 +259,6 @@ def calculate_score(job, profile_text=""):
     title = job.get("title", "").lower()
     company = job.get("company", "").lower()
 
-    # Remote quality
     if "anywhere" in loc or "global" in loc:
         score += 20
     elif "remote" in loc:
@@ -266,7 +266,6 @@ def calculate_score(job, profile_text=""):
     elif "fully remote" in desc:
         score += 18
 
-    # Recency
     posted = job.get("posted_at", "")
     if posted:
         try:
@@ -280,11 +279,9 @@ def calculate_score(job, profile_text=""):
         except:
             pass
 
-    # Direct apply
     if "greenhouse.io" in job.get("url", "") or "lever.co" in job.get("url", ""):
         score += 10
 
-    # Easy roles
     easy_keywords = [
         "data entry", "virtual assistant", "customer support", "customer success",
         "support specialist", "operations associate", "onboarding", "implementation",
@@ -298,19 +295,16 @@ def calculate_score(job, profile_text=""):
             score += 15
             break
 
-    # Global‑friendly company bonus
     for gc in GLOBAL_FRIENDLY_COMPANIES:
         if gc in company:
             score += 25
             break
 
-    # Geo‑restricted penalty
     for gr in GEO_RESTRICTED_COMPANIES:
         if gr in company:
             score -= 50
             break
 
-    # Semantic
     if config.get("enable_semantic_scoring", False) and profile_text:
         sem_score = semantic_score(job, profile_text)
         score += sem_score * 0.3
@@ -344,8 +338,7 @@ def update_source_reputation(source, success):
     save_source_reputation(rep)
     return rep[source].get("active", True)
 
-# ─── FETCHERS ───
-
+# ─── FETCHERS (all sources) ───
 def fetch_remoteok():
     try:
         resp = requests.get("https://remoteok.com/api", headers=random_headers(), timeout=20)
@@ -472,7 +465,7 @@ def fetch_jobspy():
     try:
         from jobspy import scrape_jobs
     except ImportError:
-        log.warning("   ⚠️ JobSpy not installed. Install: pip install python-jobspy")
+        log.warning("   ⚠️ JobSpy not installed.")
         return []
     try:
         df = scrape_jobs(
@@ -763,7 +756,6 @@ def fetch_google_jobs():
     return jobs
 
 def fetch_yc_jobs():
-    # Y Combinator Jobs – use the public JSON endpoint
     try:
         resp = requests.get("https://www.ycombinator.com/companies", headers=random_headers(), timeout=20)
         if resp.status_code == 200:
@@ -794,21 +786,18 @@ def fetch_yc_jobs():
     return []
 
 def fetch_wellfound():
-    # Wellfound (AngelList) – scrape the roles page
     try:
-        # Wellfound is JS-heavy; we'll use a simple HTML parser with BeautifulSoup if available.
-        try:
-            from bs4 import BeautifulSoup
-            HAS_BS4 = True
-        except ImportError:
-            HAS_BS4 = False
-            log.warning("   ⚠️ BeautifulSoup not installed. Wellfound skipped.")
-            return []
+        from bs4 import BeautifulSoup
+        HAS_BS4 = True
+    except ImportError:
+        HAS_BS4 = False
+        log.warning("   ⚠️ BeautifulSoup not installed. Wellfound skipped.")
+        return []
+    try:
         resp = requests.get("https://wellfound.com/roles", headers=random_headers(), timeout=20)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
             jobs = []
-            # Find job cards – this is a simplified example; actual selectors may change.
             for card in soup.select(".role-card"):
                 title_elem = card.select_one(".role-title")
                 company_elem = card.select_one(".company-name")
@@ -887,7 +876,7 @@ def fetch_discovered_sources():
     log.info(f"   ✅ Discovered sources: {len(jobs)} jobs")
     return jobs
 
-# ─── SOURCE DISCOVERY (weekly) ───
+# ─── SOURCE DISCOVERY ───
 def discover_new_sources():
     if not config.get("enable_source_discovery", True):
         return
@@ -895,7 +884,6 @@ def discover_new_sources():
     new_sources = []
     discovered_urls = set()
 
-    # 1. Known directories
     directories = [
         "https://www.remotejobboards.com",
         "https://jobboardsearch.com",
@@ -914,7 +902,6 @@ def discover_new_sources():
         except Exception as e:
             log.warning(f"Directory scan failed: {e}")
 
-    # 2. SerpAPI (Google search)
     api_key = os.getenv("SERPAPI_KEY")
     if api_key:
         queries = ["new remote job board", "best remote job boards 2025", "alternative to LinkedIn jobs"]
@@ -931,7 +918,6 @@ def discover_new_sources():
             except Exception as e:
                 log.warning(f"SerpAPI search failed: {e}")
 
-    # 3. Add to sources table
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     for src in new_sources:
@@ -980,22 +966,20 @@ def send_daily_digest(jobs):
 # ─── MAIN ───
 def main():
     log.info("="*60)
-    log.info("🌍 Remote Opportunity Hunter v29.0")
+    log.info("🌍 Remote Opportunity Hunter v29.1")
     log.info(f"   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    log.info("   Ultimate – All Sources • Self‑Expanding")
+    log.info("   Fixed: content column added")
     log.info("="*60)
 
     init_db()
     archive_old_jobs()
 
-    # Weekly discovery
     if datetime.now().weekday() == 0:
         discover_new_sources()
 
     all_jobs = []
     source_counts = defaultdict(int)
 
-    # ─── Build source list ───
     sources = [
         ("remoteok", fetch_remoteok, True),
         ("remotive", fetch_remotive, True),
@@ -1012,11 +996,9 @@ def main():
         ("yc", fetch_yc_jobs, True),
         ("wellfound", fetch_wellfound, True),
     ]
-    # Greenhouse
     for slug in ["stripe", "anthropic", "figma", "notion", "linear", "supabase", "gitlab"]:
         sources.append((f"greenhouse_{slug}", lambda s=slug: fetch_greenhouse(s), True))
 
-    # Fetch in parallel
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = {}
         for name, fetcher, enabled in sources:
@@ -1041,7 +1023,6 @@ def main():
     log.info(f"\n📊 Total fetched: {len(all_jobs)}")
     log.info(f"   Sources: {dict(source_counts)}")
 
-    # ─── Process jobs ───
     profile_text = os.getenv("PROFILE_TEXT", "")
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -1076,7 +1057,6 @@ def main():
 
     log.info(f"✅ Saved {len(all_jobs)} jobs to database")
 
-    # ─── Email digest ───
     if config.get("enable_email_digest", False):
         send_daily_digest(all_jobs[:10])
 
