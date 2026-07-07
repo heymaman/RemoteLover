@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Remote Opportunity Hunter v29.0 – ULTIMATE (COMPLETE)
+Remote Lover v19.0 – ULTIMATE (COMPLETE)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 All fetchers implemented, source discovery added, email digest ready.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
