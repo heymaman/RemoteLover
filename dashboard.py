@@ -1,4 +1,4 @@
-# dashboard.py – v30.0 (Most Efficient)
+# dashboard.py – v30.0 (Efficient & Fast)
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -9,7 +9,6 @@ from pathlib import Path
 
 st.set_page_config(page_title="Remote Jobs", page_icon="🌍", layout="wide")
 
-# ─── COMPANY REPUTATION (for badges) ───
 GLOBAL_FRIENDLY_COMPANIES = [
     "gitlab", "stripe", "figma", "notion", "linear", "supabase", "airbnb",
     "vercel", "railway", "anthropic", "deepmind", "shopify", "discord",
@@ -18,11 +17,9 @@ GLOBAL_FRIENDLY_COMPANIES = [
 ]
 global_friendly_lower = [c.lower() for c in GLOBAL_FRIENDLY_COMPANIES]
 
-# ─── DATABASE PATH ───
 DB_PATH = Path("data/jobs.db")
 DB_PATH.parent.mkdir(exist_ok=True)
 
-# ─── MIGRATION ───
 def migrate_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -35,7 +32,7 @@ def migrate_db():
     for col, dtype in [("salary_min", "INTEGER"), ("salary_max", "INTEGER"),
                        ("salary_text", "TEXT"), ("source_url", "TEXT"),
                        ("type", "TEXT"), ("notes", "TEXT"), ("score", "INTEGER"),
-                       ("saved", "BOOLEAN")]:
+                       ("saved", "BOOLEAN"), ("content", "TEXT")]:
         if col not in existing:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {col} {dtype} DEFAULT ''")
     conn.commit()
@@ -43,7 +40,6 @@ def migrate_db():
 
 migrate_db()
 
-# ─── LOAD DATA WITH CACHING ───
 @st.cache_data(ttl=300)
 def load_filtered_data(status, min_score, job_type, date_range, search, sort_by, limit, show_global_only):
     conn = sqlite3.connect(DB_PATH)
@@ -73,10 +69,6 @@ def load_filtered_data(status, min_score, job_type, date_range, search, sort_by,
         query += " AND seen_at >= ?"
         params.append(cutoff)
 
-    if show_global_only:
-        # We'll filter after loading because it's easier; but we can also do it in SQL
-        pass
-
     if sort_by == "Easiest first (tasks then jobs)":
         order = "CASE type WHEN 'task' THEN 0 WHEN 'job' THEN 1 END, score DESC"
     elif sort_by == "Highest score":
@@ -88,11 +80,9 @@ def load_filtered_data(status, min_score, job_type, date_range, search, sort_by,
     df = pd.read_sql_query(query, conn, params=params)
     conn.close()
 
-    # Apply global‑only filter (if needed)
     if show_global_only:
         df = df[df['company'].str.lower().apply(lambda x: any(gc in x for gc in global_friendly_lower))]
 
-    # Format salary display
     df['salary_display'] = df.apply(
         lambda r: f"${r['salary_min']:,.0f}" if r['salary_min'] and r['salary_min'] == r['salary_max'] else
                   f"${r['salary_min']:,.0f}-${r['salary_max']:,.0f}" if r['salary_min'] and r['salary_max'] else
@@ -104,7 +94,6 @@ def load_filtered_data(status, min_score, job_type, date_range, search, sort_by,
     df['saved_display'] = df['saved'].apply(lambda x: "⭐" if x else "")
     return df
 
-# ─── CHECK IF DB HAS DATA ───
 def has_jobs_table():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -113,7 +102,6 @@ def has_jobs_table():
     conn.close()
     return result
 
-# ─── DARK MODE ───
 dark = st.sidebar.toggle("🌙 Dark Mode", value=st.session_state.get("dark_mode", False))
 st.session_state.dark_mode = dark
 if dark:
@@ -124,7 +112,6 @@ if dark:
         </style>
     """, unsafe_allow_html=True)
 
-# ─── HERO ───
 st.markdown("""
 <div style="background: linear-gradient(135deg, #1a1a2e, #16213e, #0f3460); padding: 20px; border-radius: 10px; margin-bottom: 20px; text-align: center;">
     <h1 style="color: white; margin: 0;">🌍 Remote Jobs for Everyone</h1>
@@ -132,7 +119,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ─── FILTER FORM ───
 with st.sidebar.form("filter_form"):
     st.header("🔍 Filters")
     status = st.multiselect(
@@ -154,7 +140,6 @@ with st.sidebar.form("filter_form"):
     limit = st.slider("Max results", 50, 500, 200, step=50)
     submitted = st.form_submit_button("Apply Filters")
 
-# ─── DATA LOAD ───
 if not has_jobs_table():
     st.warning("🚫 No data – run the scraper first.")
     if st.button("🚀 Run Scraper Now"):
@@ -170,13 +155,11 @@ if not has_jobs_table():
 
 df = load_filtered_data(status, min_score, job_type, date_range, search, sort_by, limit, show_global_only)
 
-# ─── TASKS FIRST (if enabled) ───
 if tasks_first and not df.empty:
     df['type_order'] = df['type'].map({'task': 0, 'job': 1})
     df = df.sort_values(['type_order', 'score'], ascending=[True, False])
     df = df.drop(columns=['type_order'])
 
-# ─── METRICS ───
 conn = sqlite3.connect(DB_PATH)
 total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
 new = conn.execute("SELECT COUNT(*) FROM jobs WHERE status='new'").fetchone()[0]
@@ -192,7 +175,6 @@ c4.metric("🎯 Interview", interview)
 
 st.markdown("---")
 
-# ─── TOP CARDS ───
 st.subheader("🏆 Top Opportunities")
 if not df.empty:
     top_jobs = df.sort_values('score', ascending=False).head(6)
@@ -212,7 +194,6 @@ if not df.empty:
 else:
     st.info("No jobs match your filters.")
 
-# ─── DATA TABLE ───
 st.subheader(f"📋 All Jobs ({len(df)} shown)")
 st.dataframe(
     df[['title', 'company', 'location', 'salary_display', 'score', 'status', 'type', '🌍', 'saved_display', 'url']],
@@ -232,13 +213,11 @@ st.dataframe(
     hide_index=True,
 )
 
-# ─── SOURCE BREAKDOWN ───
 st.sidebar.subheader("📡 Sources")
 source_counts = df['source'].value_counts()
 for src, count in source_counts.items():
     st.sidebar.write(f"🔹 {src}: {count}")
 
-# ─── DETAILS & SAVE ───
 with st.expander("📄 Job Details"):
     if not df.empty:
         selected = st.selectbox("Select a job", df['id'].tolist())
@@ -254,7 +233,6 @@ with st.expander("📄 Job Details"):
         **Type:** {'🧩 Task' if job['type']=='task' else '💼 Job'}  
         [Apply Now]({job['url']})
         """)
-        # Save button
         saved = job.get('saved', False)
         if st.button("⭐ Save" if not saved else "Unsave"):
             conn = sqlite3.connect(DB_PATH)
@@ -264,7 +242,6 @@ with st.expander("📄 Job Details"):
             st.cache_data.clear()
             st.rerun()
 
-# ─── SIDEBAR ACTIONS ───
 st.sidebar.markdown("---")
 if st.sidebar.button("🔄 Run Scraper"):
     with st.spinner("Fetching jobs..."):
