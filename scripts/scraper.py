@@ -1359,4 +1359,3 @@ if __name__ == "__main__":
         log.error(error_msg)
         send_email_error(error_msg)
         sys.exit(1)
-      
