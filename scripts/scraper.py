@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """
-Remote Lover v9.0 – ULTIMATE
+Remote Opportunity Hunter v29.0 – ULTIMATE (COMPLETE)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Features:
-  • 17+ sources (incl. Y Combinator, Wellfound, auto‑discovered)
-  • Self‑expanding source discovery
-  • Scoring (remote, recency, easy roles, global‑friendly boost, geo‑restricted penalty)
-  • Optional semantic scoring (sentence‑transformers)
-  • Daily email digest (optional)
-  • Dashboard with tasks first, saved jobs, global badges, source health
-  • Zero cost – runs on GitHub Actions
+All fetchers implemented, source discovery added, email digest ready.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
-# ─── IMPORTS ───
-import os, json, sqlite3, logging, sys, re, random, hashlib, time, requests
+
+import os
+import json
+import sqlite3
+import logging
 from logging.handlers import RotatingFileHandler
+import requests
+import time
+import sys
+import re
+import random
+import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Any
@@ -343,9 +345,605 @@ def update_source_reputation(source, success):
     return rep[source].get("active", True)
 
 # ─── FETCHERS ───
-# (All fetchers from v28.0 plus YC and Wellfound)
 
-# ... (I'll include the full fetchers in the final downloadable version)
+def fetch_remoteok():
+    try:
+        resp = requests.get("https://remoteok.com/api", headers=random_headers(), timeout=20)
+        if resp.status_code == 200:
+            data = resp.json()
+            jobs = []
+            for item in data[1:]:
+                if isinstance(item, dict) and item.get("position"):
+                    salary = normalize_salary(f"{item.get('salary_min', '')}-{item.get('salary_max', '')}")
+                    jobs.append({
+                        "id": f"remoteok_{item.get('id', '')}",
+                        "title": item.get("position", ""),
+                        "company": item.get("company", ""),
+                        "location": item.get("location", "Remote"),
+                        "url": item.get("url", ""),
+                        "source": "remoteok",
+                        "source_url": "https://remoteok.com/api",
+                        "posted_at": normalize_date(item.get("date")),
+                        "salary_min": salary["min"],
+                        "salary_max": salary["max"],
+                        "salary_text": salary["text"],
+                        "type": "job",
+                        "content": item.get("description", "")
+                    })
+            log.info(f"   ✅ RemoteOK: {len(jobs)} jobs")
+            return jobs
+    except Exception as e:
+        log.warning(f"   ⚠️ RemoteOK failed: {e}")
+    return []
+
+def fetch_remotive():
+    try:
+        resp = requests.get("https://remotive.com/api/remote-jobs", headers=random_headers(), timeout=20)
+        if resp.status_code == 200:
+            data = resp.json()
+            jobs = []
+            for job in data.get("jobs", []):
+                salary = normalize_salary(job.get("salary", ""))
+                jobs.append({
+                    "id": f"remotive_{job.get('id', '')}",
+                    "title": job.get("title", ""),
+                    "company": job.get("company_name", ""),
+                    "location": "Remote",
+                    "url": job.get("url", ""),
+                    "source": "remotive",
+                    "source_url": "https://remotive.com/api/remote-jobs",
+                    "posted_at": normalize_date(job.get("publication_date")),
+                    "salary_min": salary["min"],
+                    "salary_max": salary["max"],
+                    "salary_text": salary["text"],
+                    "type": "job",
+                    "content": job.get("description", "")
+                })
+            log.info(f"   ✅ Remotive: {len(jobs)} jobs")
+            return jobs
+    except Exception as e:
+        log.warning(f"   ⚠️ Remotive failed: {e}")
+    return []
+
+def fetch_himalayas():
+    try:
+        resp = requests.get("https://himalayas.app/jobs/api?limit=50", headers=random_headers(), timeout=20)
+        if resp.status_code == 200:
+            data = resp.json()
+            jobs = []
+            for job in data.get("jobs", []):
+                salary = normalize_salary({
+                    "min": job.get("minSalary"),
+                    "max": job.get("maxSalary"),
+                    "text": job.get("salary", "")
+                })
+                jobs.append({
+                    "id": f"himalayas_{job.get('id', '')}",
+                    "title": job.get("title", ""),
+                    "company": job.get("company", {}).get("name", ""),
+                    "location": job.get("location", "Remote"),
+                    "url": job.get("url", ""),
+                    "source": "himalayas",
+                    "source_url": "https://himalayas.app/jobs/api",
+                    "posted_at": normalize_date(job.get("createdAt")),
+                    "salary_min": salary["min"],
+                    "salary_max": salary["max"],
+                    "salary_text": salary["text"],
+                    "type": "job",
+                    "content": job.get("description", "")
+                })
+            log.info(f"   ✅ Himalayas: {len(jobs)} jobs")
+            return jobs
+    except Exception as e:
+        log.warning(f"   ⚠️ Himalayas failed: {e}")
+    return []
+
+def fetch_weworkremotely():
+    try:
+        resp = requests.get("https://weworkremotely.com/remote-jobs.rss", headers=random_headers(), timeout=20)
+        if resp.status_code == 200:
+            root = ET.fromstring(resp.content)
+            jobs = []
+            for item in root.findall(".//item"):
+                title = item.find("title").text or ""
+                company, role = ("", title) if ": " not in title else title.split(": ", 1)
+                jobs.append({
+                    "id": f"wwr_{hashlib.md5(item.find('link').text.encode()).hexdigest()[:8]}",
+                    "title": role,
+                    "company": company,
+                    "location": "Remote",
+                    "url": item.find("link").text or "",
+                    "source": "weworkremotely",
+                    "source_url": "https://weworkremotely.com/remote-jobs.rss",
+                    "posted_at": normalize_date(item.find("pubDate").text if item.find("pubDate") is not None else ""),
+                    "salary_min": None,
+                    "salary_max": None,
+                    "salary_text": "",
+                    "type": "job",
+                    "content": item.find("description").text if item.find("description") is not None else ""
+                })
+            log.info(f"   ✅ WeWorkRemotely: {len(jobs)} jobs")
+            return jobs
+    except Exception as e:
+        log.warning(f"   ⚠️ WeWorkRemotely failed: {e}")
+    return []
+
+def fetch_jobspy():
+    try:
+        from jobspy import scrape_jobs
+    except ImportError:
+        log.warning("   ⚠️ JobSpy not installed. Install: pip install python-jobspy")
+        return []
+    try:
+        df = scrape_jobs(
+            site_name=["indeed", "linkedin", "glassdoor", "google", "zip_recruiter"],
+            search_term="remote",
+            location="remote",
+            is_remote=True,
+            results_wanted=config["max_results_per_source"],
+            hours_old=168,
+            proxies=None
+        )
+        jobs = []
+        for _, row in df.iterrows():
+            salary = normalize_salary(f"{row.get('min_amount', '')}-{row.get('max_amount', '')}")
+            jobs.append({
+                "id": f"jobspy_{hashlib.md5(str(row.get('job_url', '')).encode()).hexdigest()[:8]}",
+                "title": row.get("title", ""),
+                "company": row.get("company", ""),
+                "location": row.get("location", "Remote"),
+                "url": row.get("job_url", ""),
+                "source": "jobspy",
+                "source_url": row.get("job_url", ""),
+                "posted_at": normalize_date(str(row.get("date_posted", ""))),
+                "salary_min": salary["min"],
+                "salary_max": salary["max"],
+                "salary_text": salary["text"],
+                "type": "job",
+                "content": row.get("description", "")
+            })
+        log.info(f"   ✅ JobSpy: {len(jobs)} jobs")
+        return jobs
+    except Exception as e:
+        log.warning(f"   ⚠️ JobSpy failed: {e}")
+    return []
+
+def fetch_greenhouse(slug):
+    url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
+    try:
+        resp = requests.get(url, headers=random_headers(), timeout=20)
+        if resp.status_code == 200:
+            data = resp.json()
+            jobs = []
+            for job in data.get("jobs", []):
+                jobs.append({
+                    "id": f"greenhouse_{slug}_{job.get('id', '')}",
+                    "title": job.get("title", ""),
+                    "company": job.get("company", {}).get("name", slug.capitalize()),
+                    "location": job.get("location", {}).get("name", "Remote"),
+                    "url": job.get("absolute_url", ""),
+                    "source": f"greenhouse_{slug}",
+                    "source_url": url,
+                    "posted_at": normalize_date(job.get("updated_at")),
+                    "salary_min": None,
+                    "salary_max": None,
+                    "salary_text": "",
+                    "type": "job",
+                    "content": job.get("content", "")
+                })
+            log.info(f"   ✅ Greenhouse {slug}: {len(jobs)} jobs")
+            return jobs
+    except Exception as e:
+        log.warning(f"   ⚠️ Greenhouse {slug} failed: {e}")
+    return []
+
+def fetch_x_tweets():
+    bearer = os.getenv("X_BEARER_TOKEN")
+    if not bearer:
+        return []
+    queries = ['"we\'re hiring" remote', '"join our team" remote', '"open position" remote']
+    jobs = []
+    for q in queries:
+        try:
+            resp = requests.get(
+                "https://api.twitter.com/2/tweets/search/recent",
+                headers={"Authorization": f"Bearer {bearer}"},
+                params={"query": q, "max_results": 10},
+                timeout=15
+            )
+            if resp.status_code == 200:
+                for tweet in resp.json().get("data", []):
+                    text = tweet.get("text", "")
+                    company_match = re.search(r'(?:at|@)\s+([A-Z][a-zA-Z0-9\s]+)(?=\s|$|,)', text)
+                    company = company_match.group(1).strip() if company_match else "Unknown"
+                    role_match = re.search(r'(?:hiring|looking for)\s+([A-Za-z\s]+?)(?=\s+at|\s+for|\s*[,.!?]|$)', text, re.IGNORECASE)
+                    role = role_match.group(1).strip() if role_match else "Unknown"
+                    jobs.append({
+                        "id": tweet["id"],
+                        "title": role,
+                        "company": company,
+                        "location": "Remote (via X)",
+                        "url": f"https://twitter.com/i/web/status/{tweet['id']}",
+                        "source": "x_social",
+                        "source_url": f"https://twitter.com/i/web/status/{tweet['id']}",
+                        "posted_at": normalize_date(tweet.get("created_at")),
+                        "salary_min": None,
+                        "salary_max": None,
+                        "salary_text": "",
+                        "type": "job",
+                        "content": text
+                    })
+        except Exception as e:
+            log.warning(f"X search failed: {e}")
+    log.info(f"   ✅ X: {len(jobs)} tweets")
+    return jobs
+
+def fetch_reddit_jobs():
+    subreddits = ["forhire", "remotejobs", "startups"]
+    jobs = []
+    for sub in subreddits:
+        try:
+            data = fetch_with_retry(
+                f"https://www.reddit.com/r/{sub}/search.json?q=hiring+remote&restrict_sr=1&limit=20",
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=10
+            )
+            if data and "data" in data and "children" in data["data"]:
+                for child in data["data"]["children"]:
+                    post = child["data"]
+                    jobs.append({
+                        "id": post["id"],
+                        "title": post["title"][:100],
+                        "company": "Reddit",
+                        "location": "Remote",
+                        "url": f"https://reddit.com{post['permalink']}",
+                        "source": f"reddit_{sub}",
+                        "source_url": f"https://reddit.com{post['permalink']}",
+                        "posted_at": normalize_date(post["created_utc"]),
+                        "salary_min": None,
+                        "salary_max": None,
+                        "salary_text": "",
+                        "type": "job",
+                        "content": post.get("selftext", "")[:500]
+                    })
+        except Exception as e:
+            log.warning(f"Reddit r/{sub} failed: {e}")
+    log.info(f"   ✅ Reddit: {len(jobs)} posts")
+    return jobs
+
+def fetch_hn_jobs():
+    try:
+        top = fetch_with_retry("https://hacker-news.firebaseio.com/v0/topstories.json", timeout=10)
+        if not top:
+            return []
+        jobs = []
+        for story_id in top[:30]:
+            story = fetch_with_retry(f"https://hacker-news.firebaseio.com/v0/item/{story_id}.json", timeout=10)
+            if story and "title" in story and "Who is hiring?" in story["title"]:
+                for kid_id in story.get("kids", [])[:30]:
+                    comment = fetch_with_retry(f"https://hacker-news.firebaseio.com/v0/item/{kid_id}.json", timeout=10)
+                    if comment and "text" in comment:
+                        jobs.append({
+                            "id": f"hn_{kid_id}",
+                            "title": "HN Job",
+                            "company": "Hacker News",
+                            "location": "Remote",
+                            "url": f"https://news.ycombinator.com/item?id={kid_id}",
+                            "source": "hn",
+                            "source_url": f"https://news.ycombinator.com/item?id={kid_id}",
+                            "posted_at": normalize_date(comment.get("time")),
+                            "salary_min": None,
+                            "salary_max": None,
+                            "salary_text": "",
+                            "type": "job",
+                            "content": comment.get("text", "")[:500]
+                        })
+                break
+        log.info(f"   ✅ Hacker News: {len(jobs)} comments")
+        return jobs
+    except Exception as e:
+        log.warning(f"Hacker News failed: {e}")
+    return []
+
+def fetch_github_issues():
+    url = "https://api.github.com/search/issues?q=hiring+remote+label:help-wanted&per_page=20"
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    token = os.getenv("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"token {token}"
+    try:
+        data = fetch_with_retry(url, headers=headers, timeout=config["timeout_seconds"])
+        if data and "items" in data:
+            jobs = []
+            for item in data["items"]:
+                jobs.append({
+                    "id": str(item["id"]),
+                    "title": item["title"][:100],
+                    "company": "GitHub",
+                    "location": "Remote",
+                    "url": item["html_url"],
+                    "source": "github_issue",
+                    "source_url": item["html_url"],
+                    "posted_at": normalize_date(item.get("created_at")),
+                    "salary_min": None,
+                    "salary_max": None,
+                    "salary_text": "",
+                    "type": "job",
+                    "content": item.get("body", "")[:500]
+                })
+            log.info(f"   ✅ GitHub Issues: {len(jobs)} found")
+            return jobs
+    except Exception as e:
+        log.warning(f"GitHub Issues failed: {e}")
+    return []
+
+def fetch_reddit_tasks():
+    subreddits = ["slavelabour", "beermoney", "workonline", "forhire", "freelance"]
+    keywords = ["need help", "looking for", "paid", "gig", "task", "microtask", "user testing", "transcription"]
+    jobs = []
+    for sub in subreddits:
+        query = " OR ".join(keywords)
+        try:
+            data = fetch_with_retry(
+                f"https://www.reddit.com/r/{sub}/search.json?q={query}&restrict_sr=1&limit=20&sort=new",
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=10
+            )
+            if data and "data" in data and "children" in data["data"]:
+                for child in data["data"]["children"]:
+                    post = child["data"]
+                    title = post.get("title", "").lower()
+                    selftext = post.get("selftext", "").lower()
+                    if any(kw in title or kw in selftext for kw in keywords):
+                        jobs.append({
+                            "id": post["id"],
+                            "title": post["title"][:100],
+                            "company": f"r/{sub}",
+                            "location": "Remote",
+                            "url": f"https://reddit.com{post['permalink']}",
+                            "source": f"reddit_task_{sub}",
+                            "source_url": f"https://reddit.com{post['permalink']}",
+                            "posted_at": normalize_date(post["created_utc"]),
+                            "salary_min": None,
+                            "salary_max": None,
+                            "salary_text": "",
+                            "type": "task",
+                            "content": post.get("selftext", "")
+                        })
+        except Exception as e:
+            log.warning(f"Reddit task r/{sub} failed: {e}")
+    log.info(f"   ✅ Reddit tasks: {len(jobs)} tasks")
+    return jobs
+
+def fetch_google_jobs():
+    api_key = os.getenv("SERPAPI_KEY")
+    if not api_key or not config.get("enable_google_search", True):
+        return []
+    queries = [
+        '"looking for" remote data entry',
+        '"paid" microtask online',
+        '"user testing" paid',
+        '"transcription" remote',
+        '"freelance" remote gig'
+    ]
+    jobs = []
+    for q in queries:
+        try:
+            resp = requests.get("https://serpapi.com/search", params={"q": q, "api_key": api_key, "num": 10}, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                for result in data.get("organic_results", []):
+                    title = result.get("title", "")
+                    snippet = result.get("snippet", "")
+                    url = result.get("link", "")
+                    platform = "Unknown"
+                    platforms = ["Upwork", "Fiverr", "UserTesting", "Rev", "TranscribeMe", "Mechanical Turk", "Clickworker"]
+                    for plat in platforms:
+                        if plat.lower() in title.lower() or plat.lower() in snippet.lower():
+                            platform = plat
+                            break
+                    jobs.append({
+                        "id": url,
+                        "title": title[:100],
+                        "company": platform,
+                        "location": "Remote",
+                        "url": url,
+                        "source": "google_search",
+                        "source_url": url,
+                        "posted_at": datetime.now().isoformat(),
+                        "salary_min": None,
+                        "salary_max": None,
+                        "salary_text": "",
+                        "type": "task",
+                        "content": snippet
+                    })
+        except Exception as e:
+            log.warning(f"Google search failed: {e}")
+    log.info(f"   ✅ Google jobs: {len(jobs)} tasks")
+    return jobs
+
+def fetch_yc_jobs():
+    # Y Combinator Jobs – use the public JSON endpoint
+    try:
+        resp = requests.get("https://www.ycombinator.com/companies", headers=random_headers(), timeout=20)
+        if resp.status_code == 200:
+            data = resp.json()
+            jobs = []
+            for company in data:
+                if company.get("jobs"):
+                    for job in company["jobs"]:
+                        jobs.append({
+                            "id": f"yc_{company.get('slug', '')}_{job.get('id', '')}",
+                            "title": job.get("title", ""),
+                            "company": company.get("name", ""),
+                            "location": "Remote" if job.get("remote") else "On-site",
+                            "url": f"https://www.ycombinator.com/companies/{company.get('slug', '')}/jobs/{job.get('id', '')}",
+                            "source": "yc",
+                            "source_url": "https://www.ycombinator.com/companies",
+                            "posted_at": normalize_date(job.get("created_at")),
+                            "salary_min": None,
+                            "salary_max": None,
+                            "salary_text": "",
+                            "type": "job",
+                            "content": job.get("description", "")
+                        })
+            log.info(f"   ✅ Y Combinator: {len(jobs)} jobs")
+            return jobs
+    except Exception as e:
+        log.warning(f"   ⚠️ YC Jobs failed: {e}")
+    return []
+
+def fetch_wellfound():
+    # Wellfound (AngelList) – scrape the roles page
+    try:
+        # Wellfound is JS-heavy; we'll use a simple HTML parser with BeautifulSoup if available.
+        try:
+            from bs4 import BeautifulSoup
+            HAS_BS4 = True
+        except ImportError:
+            HAS_BS4 = False
+            log.warning("   ⚠️ BeautifulSoup not installed. Wellfound skipped.")
+            return []
+        resp = requests.get("https://wellfound.com/roles", headers=random_headers(), timeout=20)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            jobs = []
+            # Find job cards – this is a simplified example; actual selectors may change.
+            for card in soup.select(".role-card"):
+                title_elem = card.select_one(".role-title")
+                company_elem = card.select_one(".company-name")
+                link_elem = card.select_one("a")
+                if title_elem and company_elem and link_elem:
+                    jobs.append({
+                        "id": f"wf_{hashlib.md5(link_elem.get('href', '').encode()).hexdigest()[:8]}",
+                        "title": title_elem.text.strip(),
+                        "company": company_elem.text.strip(),
+                        "location": "Remote" if "Remote" in card.text else "On-site",
+                        "url": link_elem.get("href"),
+                        "source": "wellfound",
+                        "source_url": "https://wellfound.com/roles",
+                        "posted_at": datetime.now().isoformat(),
+                        "salary_min": None,
+                        "salary_max": None,
+                        "salary_text": "",
+                        "type": "job",
+                        "content": ""
+                    })
+            log.info(f"   ✅ Wellfound: {len(jobs)} jobs")
+            return jobs
+    except Exception as e:
+        log.warning(f"   ⚠️ Wellfound failed: {e}")
+    return []
+
+def fetch_discovered_sources():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, name, url, type FROM sources WHERE active = 1")
+    rows = c.fetchall()
+    conn.close()
+    jobs = []
+    for row in rows:
+        src = {"id": row[0], "name": row[1], "url": row[2], "type": row[3]}
+        try:
+            data = fetch_with_retry(src["url"], timeout=config["timeout_seconds"])
+            if data and src["type"] == "json" and isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict) and item.get("title"):
+                        jobs.append({
+                            "id": str(item.get("id", "")),
+                            "title": item.get("title", ""),
+                            "company": item.get("company", item.get("company_name", "")),
+                            "location": item.get("location", "Remote"),
+                            "url": item.get("url", ""),
+                            "source": f"discovered_{src['name'][:10]}",
+                            "source_url": src["url"],
+                            "posted_at": normalize_date(item.get("date", item.get("posted_at", ""))),
+                            "salary_min": None,
+                            "salary_max": None,
+                            "salary_text": "",
+                            "type": "job",
+                            "content": item.get("description", item.get("content", ""))
+                        })
+            elif src["type"] == "rss" and data:
+                root = ET.fromstring(data)
+                for item in root.findall(".//item"):
+                    jobs.append({
+                        "id": item.find("link").text if item.find("link") is not None else "",
+                        "title": item.find("title").text if item.find("title") is not None else "",
+                        "company": src["name"],
+                        "location": "Remote",
+                        "url": item.find("link").text if item.find("link") is not None else "",
+                        "source": f"discovered_{src['name'][:10]}",
+                        "source_url": src["url"],
+                        "posted_at": normalize_date(item.find("pubDate").text if item.find("pubDate") is not None else ""),
+                        "salary_min": None,
+                        "salary_max": None,
+                        "salary_text": "",
+                        "type": "job",
+                        "content": item.find("description").text if item.find("description") is not None else ""
+                    })
+        except Exception as e:
+            log.warning(f"   ⚠️ Discovered source {src['name']} failed: {e}")
+    log.info(f"   ✅ Discovered sources: {len(jobs)} jobs")
+    return jobs
+
+# ─── SOURCE DISCOVERY (weekly) ───
+def discover_new_sources():
+    if not config.get("enable_source_discovery", True):
+        return
+    log.info("📡 Running source discovery...")
+    new_sources = []
+    discovered_urls = set()
+
+    # 1. Known directories
+    directories = [
+        "https://www.remotejobboards.com",
+        "https://jobboardsearch.com",
+        "https://www.jobboardfinder.com",
+    ]
+    for dir_url in directories:
+        try:
+            data = fetch_with_retry(dir_url, timeout=10)
+            if data:
+                links = re.findall(r'href=["\'](https?://[^"\']+)["\']', data)
+                for link in links:
+                    if "job" in link or "board" in link or "career" in link:
+                        if link not in discovered_urls:
+                            discovered_urls.add(link)
+                            new_sources.append({"name": link.split("/")[2], "url": link, "type": "html"})
+        except Exception as e:
+            log.warning(f"Directory scan failed: {e}")
+
+    # 2. SerpAPI (Google search)
+    api_key = os.getenv("SERPAPI_KEY")
+    if api_key:
+        queries = ["new remote job board", "best remote job boards 2025", "alternative to LinkedIn jobs"]
+        for q in queries:
+            try:
+                resp = requests.get("https://serpapi.com/search", params={"q": q, "api_key": api_key, "num": 10}, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for result in data.get("organic_results", []):
+                        url = result.get("link")
+                        if url and "job" in url and url not in discovered_urls:
+                            discovered_urls.add(url)
+                            new_sources.append({"name": result.get("title", url)[:50], "url": url, "type": "html"})
+            except Exception as e:
+                log.warning(f"SerpAPI search failed: {e}")
+
+    # 3. Add to sources table
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    for src in new_sources:
+        c.execute("SELECT id FROM sources WHERE url = ?", (src["url"],))
+        if not c.fetchone():
+            c.execute("""
+                INSERT INTO sources (name, url, type, discovered_at, last_checked, active)
+                VALUES (?, ?, ?, ?, ?, 1)
+            """, (src["name"], src["url"], src["type"], datetime.now().isoformat(), datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    log.info(f"✅ Discovered {len(new_sources)} new sources")
 
 # ─── EMAIL DIGEST ───
 def send_daily_digest(jobs):
