@@ -193,15 +193,39 @@ def init_db():
     conn.commit()
     conn.close()
     log.info("✅ Database initialized")
-
+  
 def archive_old_jobs():
+    """Archive jobs older than 90 days to jobs_archive table."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     cutoff = (datetime.now() - timedelta(days=90)).isoformat()
-    c.execute("INSERT INTO jobs_archive SELECT * FROM jobs WHERE seen_at < ?", (cutoff,))
-    c.execute("DELETE FROM jobs WHERE seen_at < ?", (cutoff,))
-    conn.commit()
-    conn.close()
+    
+    try:
+        # Get columns from jobs table
+        c.execute("PRAGMA table_info(jobs)")
+        jobs_cols = [row[1] for row in c.fetchall()]
+        
+        # Get columns from jobs_archive table
+        c.execute("PRAGMA table_info(jobs_archive)")
+        archive_cols = [row[1] for row in c.fetchall()]
+        
+        # Find common columns
+        common_cols = [col for col in jobs_cols if col in archive_cols]
+        
+        if common_cols:
+            cols_str = ", ".join(common_cols)
+            c.execute(f"""
+                INSERT INTO jobs_archive ({cols_str})
+                SELECT {cols_str} FROM jobs WHERE seen_at < ?
+            """, (cutoff,))
+        
+        c.execute("DELETE FROM jobs WHERE seen_at < ?", (cutoff,))
+        conn.commit()
+        log.info("✅ Archived old jobs")
+    except Exception as e:
+        log.warning(f"Archive failed: {e}")
+    finally:
+        conn.close()
 
 # ─── NORMALIZATION ───
 def normalize_date(date_str):
