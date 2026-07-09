@@ -1,4 +1,4 @@
-# dashboard.py – Remote Lover v34.0 (Redesigned)
+# dashboard.py – Remote Lover v35.0 (with AI Blog & Archived Jobs)
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -7,6 +7,7 @@ import subprocess
 import os
 from pathlib import Path
 
+# ─── PAGE CONFIG ───
 st.set_page_config(
     page_title="Remote Lover",
     page_icon="❤️",
@@ -27,11 +28,26 @@ global_friendly_lower = [c.lower() for c in GLOBAL_FRIENDLY_COMPANIES]
 # ─── SESSION STATE ───
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = False
+if "blog_generated" not in st.session_state:
+    st.session_state.blog_generated = False
+if "blog_content" not in st.session_state:
+    st.session_state.blog_content = ""
 
-# ─── CUSTOM CSS ───
+# ─── DARK MODE ───
+dark = st.sidebar.toggle("🌙 Dark Mode", value=st.session_state.dark_mode)
+st.session_state.dark_mode = dark
+if dark:
+    st.markdown("""
+        <style>
+        .stApp { background: #0e1117; color: white; }
+        .stSidebar { background: #1a1e27; }
+        .stDataFrame { background: #0e1117; }
+        </style>
+    """, unsafe_allow_html=True)
+
+# ─── BRAND HEADER ───
 st.markdown("""
 <style>
-    /* ─── Brand Header ─── */
     .brand-header {
         display: flex;
         align-items: center;
@@ -48,154 +64,22 @@ st.markdown("""
         align-items: center;
         gap: 10px;
     }
-    .brand-icon {
-        font-size: 2rem;
-        line-height: 1;
-    }
-    .brand-name {
-        font-size: 1.4rem;
-        font-weight: 700;
-        color: white;
-        letter-spacing: -0.5px;
-    }
-    .brand-name span {
-        color: #4CAF50;
-    }
-    .brand-text {
-        margin-left: 5px;
-    }
-    .brand-title-text {
-        font-size: 1.8rem;
-        font-weight: 700;
-        color: #1a1a2e;
-        margin: 0;
-        line-height: 1.2;
-    }
+    .brand-icon { font-size: 2rem; line-height: 1; }
+    .brand-name { font-size: 1.4rem; font-weight: 700; color: white; letter-spacing: -0.5px; }
+    .brand-name span { color: #4CAF50; }
+    .brand-text { margin-left: 5px; }
+    .brand-title-text { font-size: 1.8rem; font-weight: 700; color: #1a1a2e; margin: 0; line-height: 1.2; }
     .brand-title-text span {
         background: linear-gradient(135deg, #4CAF50, #2196F3);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
     }
-    .brand-subtitle-text {
-        font-size: 0.85rem;
-        color: #666;
-        margin: 0;
-    }
-
-    /* ─── Stats Cards ─── */
-    .stat-card {
-        background: #f8f9fa;
-        border-radius: 12px;
-        padding: 16px 20px;
-        text-align: center;
-        border-left: 4px solid #4CAF50;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-        transition: transform 0.2s;
-    }
-    .stat-card:hover {
-        transform: translateY(-2px);
-    }
-    .stat-number {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #1a1a2e;
-        margin: 0;
-    }
-    .stat-label {
-        font-size: 0.8rem;
-        color: #888;
-        margin: 0;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    .stat-delta {
-        font-size: 0.75rem;
-        color: #4CAF50;
-        margin: 0;
-    }
-
-    /* ─── Job Cards ─── */
-    .job-card {
-        background: #f8f9fa;
-        border-radius: 10px;
-        padding: 14px 16px;
-        margin-bottom: 8px;
-        border-left: 4px solid #4CAF50;
-        transition: background 0.2s;
-    }
-    .job-card:hover {
-        background: #e8f5e9;
-    }
-    .job-title {
-        font-weight: 600;
-        font-size: 1rem;
-        color: #1a1a2e;
-        margin: 0;
-    }
-    .job-company {
-        font-size: 0.9rem;
-        color: #555;
-        margin: 0;
-    }
-    .job-meta {
-        font-size: 0.75rem;
-        color: #888;
-        margin: 0;
-    }
-    .job-score {
-        font-weight: 700;
-        color: #4CAF50;
-    }
-    .job-badge {
-        display: inline-block;
-        padding: 2px 10px;
-        border-radius: 12px;
-        font-size: 0.65rem;
-        font-weight: 600;
-        text-transform: uppercase;
-    }
-    .badge-global {
-        background: #e3f2fd;
-        color: #0d47a1;
-    }
-    .badge-task {
-        background: #fff3e0;
-        color: #e65100;
-    }
-    .badge-job {
-        background: #e8f5e9;
-        color: #1b5e20;
-    }
-
-    /* ─── Dark Mode ─── */
+    .brand-subtitle-text { font-size: 0.85rem; color: #666; margin: 0; }
     .dark-mode .brand-title-text { color: #fff; }
     .dark-mode .brand-subtitle-text { color: #aaa; }
     .dark-mode .brand-logo-box { background: #1a1e27; border: 1px solid #333; }
-    .dark-mode .stat-card { background: #1e1e2e; border-left-color: #4CAF50; }
-    .dark-mode .stat-number { color: #fff; }
-    .dark-mode .job-card { background: #1e1e2e; }
-    .dark-mode .job-card:hover { background: #262730; }
-    .dark-mode .job-title { color: #fff; }
-    .dark-mode .job-company { color: #aaa; }
-    .dark-mode .job-meta { color: #666; }
 </style>
-""", unsafe_allow_html=True)
-
-# ─── DARK MODE ───
-dark = st.sidebar.toggle("🌙 Dark Mode", value=st.session_state.dark_mode)
-st.session_state.dark_mode = dark
-if dark:
-    st.markdown("""
-        <style>
-        .stApp { background: #0e1117; color: white; }
-        .stSidebar { background: #1a1e27; }
-        .stDataFrame { background: #0e1117; }
-        </style>
-    """, unsafe_allow_html=True)
-
-# ─── BRAND HEADER ───
-st.markdown("""
 <div class="brand-header">
     <div class="brand-logo-box">
         <span class="brand-icon">❤️</span>
@@ -228,6 +112,41 @@ def migrate_db():
     conn.close()
 
 migrate_db()
+
+# ─── AI BLOG GENERATOR ───
+try:
+    import google.generativeai as genai
+    HAS_GEMINI = True
+except ImportError:
+    HAS_GEMINI = False
+
+def generate_blog(df):
+    if not HAS_GEMINI:
+        return "⚠️ Gemini not installed. Install with: pip install google-generativeai"
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return "⚠️ GEMINI_API_KEY not set. Add it to your environment variables."
+    total_jobs = len(df)
+    top_companies = df['company'].value_counts().head(5).to_dict()
+    top_roles = df['title'].value_counts().head(5).to_dict()
+    avg_score = df['score'].mean() if not df.empty else 0
+    source_counts = df['source'].value_counts().to_dict()
+    prompt = f"""
+    Write a short, engaging blog post (300-400 words) about the current remote job market based on this data:
+    - Total jobs found: {total_jobs}
+    - Average job score: {avg_score:.1f}/100
+    - Top companies hiring remotely: {top_companies}
+    - Top job roles: {top_roles}
+    - Top job sources: {source_counts}
+    Include: 1. A catchy headline, 2. Key trends in remote hiring, 3. Which roles are most in demand, 4. Advice for job seekers, 5. A positive, encouraging tone. Use markdown formatting.
+    """
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-pro')
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"⚠️ AI generation failed: {e}"
 
 # ─── LOAD DATA ───
 @st.cache_data(ttl=300)
@@ -338,65 +257,43 @@ if tasks_first and not df.empty:
     df = df.sort_values(['type_order', 'score'], ascending=[True, False])
     df = df.drop(columns=['type_order'])
 
-# ─── STATISTICS CARDS ───
+# ─── METRICS ───
 conn = sqlite3.connect(DB_PATH)
 total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
 new = conn.execute("SELECT COUNT(*) FROM jobs WHERE status='new'").fetchone()[0]
 applied = conn.execute("SELECT COUNT(*) FROM jobs WHERE status='applied'").fetchone()[0]
 interview = conn.execute("SELECT COUNT(*) FROM jobs WHERE status='interview'").fetchone()[0]
-avg_score = conn.execute("SELECT AVG(score) FROM jobs").fetchone()[0] or 0
 conn.close()
 
-st.markdown("""
-<div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px; margin-bottom: 20px;">
-    <div class="stat-card">
-        <p class="stat-number">{}</p>
-        <p class="stat-label">Total Jobs</p>
-        <p class="stat-delta">+{} new</p>
-    </div>
-    <div class="stat-card" style="border-left-color: #2196F3;">
-        <p class="stat-number">{}</p>
-        <p class="stat-label">🆕 New</p>
-    </div>
-    <div class="stat-card" style="border-left-color: #FF9800;">
-        <p class="stat-number">{}</p>
-        <p class="stat-label">✅ Applied</p>
-    </div>
-    <div class="stat-card" style="border-left-color: #9C27B0;">
-        <p class="stat-number">{}</p>
-        <p class="stat-label">🎯 Interview</p>
-    </div>
-    <div class="stat-card" style="border-left-color: #4CAF50;">
-        <p class="stat-number">{:.1f}</p>
-        <p class="stat-label">🏆 Avg Score</p>
-    </div>
-</div>
-""".format(total, new, new, applied, interview, avg_score), unsafe_allow_html=True)
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("📊 Total", total, delta=f"+{new} new" if new > 0 else "")
+c2.metric("🆕 New", new)
+c3.metric("✅ Applied", applied)
+c4.metric("🎯 Interview", interview)
+c5.metric("🏆 Avg Score", f"{df['score'].mean():.1f}" if not df.empty else "0")
 
-# ─── TOP OPPORTUNITIES ───
+st.markdown("---")
+
+# ─── TOP CARDS ───
 st.subheader("🏆 Top Opportunities")
 if not df.empty:
     top_jobs = df.sort_values('score', ascending=False).head(6)
     cols = st.columns(3)
     for i, (_, job) in enumerate(top_jobs.iterrows()):
         badge = "🌍 " if job['global_friendly'] else ""
-        type_badge = "task" if job['type'] == 'task' else "job"
         with cols[i % 3]:
             st.markdown(f"""
-            <div class="job-card">
-                <p class="job-title">{badge}{job['title'][:40]}</p>
-                <p class="job-company">🏢 {job['company']}</p>
-                <p class="job-meta">📍 {job['location']} • ⭐ <span class="job-score">{job['score']}</span></p>
-                <p class="job-meta">
-                    <span class="job-badge badge-{type_badge}">{job['type'].upper()}</span>
-                    <a href="{job['url']}" target="_blank" style="color: #4CAF50; text-decoration: none; margin-left: 8px;">Apply →</a>
-                </p>
+            <div style="background: #1e1e2e; padding: 10px; border-radius: 8px; 
+                        margin-bottom: 6px; border-left: 4px solid #4CAF50;">
+                <b>{badge}{job['title'][:40]}</b><br>
+                🏢 {job['company']}<br>
+                📍 {job['location']}<br>
+                ⭐ Score: {job['score']}<br>
+                <a href="{job['url']}" target="_blank" style="color: #4CAF50;">Apply →</a>
             </div>
             """, unsafe_allow_html=True)
 else:
     st.info("No jobs match your filters.")
-
-st.markdown("---")
 
 # ─── DATA TABLE ───
 st.subheader(f"📋 All Jobs ({len(df)} shown)")
@@ -418,11 +315,32 @@ st.dataframe(
     hide_index=True,
 )
 
-# ─── SOURCE BREAKDOWN ───
-st.sidebar.subheader("📡 Sources")
-source_counts = df['source'].value_counts()
-for src, count in source_counts.items():
-    st.sidebar.write(f"🔹 {src}: {count}")
+# ─── AI JOB BLOG ───
+with st.expander("📝 AI Job Market Blog", expanded=False):
+    st.caption("Get AI‑generated insights about the current job market")
+    if st.button("🔄 Generate Blog"):
+        st.session_state.blog_generated = True
+        with st.spinner("Generating insights..."):
+            st.session_state.blog_content = generate_blog(df)
+    if st.session_state.blog_generated and st.session_state.blog_content:
+        st.markdown(st.session_state.blog_content)
+
+# ─── ARCHIVED JOBS ───
+with st.expander("📦 Archived Jobs (90+ days old)", expanded=False):
+    st.caption("These jobs have been archived because they are older than 90 days.")
+    conn = sqlite3.connect(DB_PATH)
+    archived_df = pd.read_sql_query("""
+        SELECT title, company, location, posted_at, archived_at
+        FROM jobs_archive
+        ORDER BY archived_at DESC
+        LIMIT 100
+    """, conn)
+    conn.close()
+    if not archived_df.empty:
+        st.dataframe(archived_df, use_container_width=True)
+        st.caption(f"Showing {len(archived_df)} archived jobs")
+    else:
+        st.info("📭 No archived jobs yet. Jobs older than 90 days will appear here.")
 
 # ─── JOB DETAILS ───
 with st.expander("📄 Job Details"):
