@@ -1,4 +1,4 @@
-# dashboard.py – Remote Lover v3.0 (Working)
+# dashboard.py – Remote Lover v3.1 (Working)
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -21,11 +21,7 @@ PAGE_SIZE = 12
 # ─── CUSTOM CSS ───
 st.markdown("""
 <style>
-    /* ─── Reset & Base ─── */
     .stApp { background: #f5f7fa; }
-    .main > div { padding: 0 1rem; }
-    
-    /* ─── Brand Header ─── */
     .header {
         display: flex;
         align-items: center;
@@ -53,8 +49,6 @@ st.markdown("""
     .stats { display: flex; gap: 20px; font-size: 0.85rem; flex-wrap: wrap; }
     .stats span { color: #6c757d; }
     .stats strong { color: #1a1a2e; }
-    
-    /* ─── Job Cards ─── */
     .job-card {
         background: white;
         border-radius: 10px;
@@ -150,8 +144,6 @@ st.markdown("""
         transition: background 0.2s;
     }
     .job-card-apply:hover { background: #388E3C; }
-    
-    /* ─── Dark Mode ─── */
     .dark .stApp { background: #0e1117; }
     .dark .header { background: #1a1e27; border-color: #2d2d3d; }
     .dark .title { color: white; }
@@ -162,8 +154,6 @@ st.markdown("""
     .dark .job-card-summary { color: #adb5bd; }
     .dark .job-card-meta { color: #868e96; }
     .dark .stats span { color: #868e96; }
-    
-    /* ─── Responsive ─── */
     @media (max-width: 768px) {
         .header { flex-direction: column; align-items: flex-start; }
         .stats { flex-wrap: wrap; }
@@ -255,10 +245,11 @@ migrate_db()
 df = load_jobs()
 total_jobs = len(df)
 
-# ─── HEADER ───
+# ─── COMPUTE STATISTICS SAFELY ───
 avg_score = df['score'].mean() if not df.empty else 0
 new_count = len(df[df['status'] == 'new']) if not df.empty else 0
 
+# ─── HEADER ───
 st.markdown(f"""
 <div class="header">
     <div class="header-left">
@@ -271,7 +262,7 @@ st.markdown(f"""
     <div class="stats">
         <span>📊 <strong>{total_jobs}</strong> jobs</span>
         <span>🆕 <strong>{new_count}</strong> new</span>
-        <span>⭐ <strong>{avg_score:.1f}</strong> avg score</span>
+        <span>⭐ <strong>{(avg_score):.1f}</strong> avg score</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
