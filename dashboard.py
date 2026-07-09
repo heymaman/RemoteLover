@@ -1,4 +1,4 @@
-# dashboard.py – Remote Lover v3.1 (Working)
+# dashboard.py – Remote Lover v3.2 (Working)
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -7,18 +7,16 @@ import subprocess
 import os
 from pathlib import Path
 
-# ─── PAGE CONFIG ───
 st.set_page_config(
     page_title="Remote Lover",
     page_icon="❤️",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
 DB_PATH = Path("data/jobs.db")
 PAGE_SIZE = 12
 
-# ─── CUSTOM CSS ───
+# ─── CSS ───
 st.markdown("""
 <style>
     .stApp { background: #f5f7fa; }
@@ -54,7 +52,6 @@ st.markdown("""
         border-radius: 10px;
         padding: 16px 18px;
         border: 1px solid #e9ecef;
-        transition: all 0.2s ease;
         height: 100%;
         display: flex;
         flex-direction: column;
@@ -64,85 +61,18 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(76,175,80,0.1);
         transform: translateY(-2px);
     }
-    .job-card-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        margin-bottom: 4px;
-    }
-    .job-card-company {
-        font-size: 0.7rem;
-        font-weight: 600;
-        color: #4CAF50;
-        text-transform: uppercase;
-        letter-spacing: 0.3px;
-    }
-    .job-card-badge {
-        font-size: 0.6rem;
-        padding: 2px 10px;
-        border-radius: 20px;
-        font-weight: 600;
-        background: #e8f5e9;
-        color: #2e7d32;
-    }
-    .job-card-title {
-        font-size: 1rem;
-        font-weight: 600;
-        color: #1a1a2e;
-        margin: 4px 0 6px 0;
-        line-height: 1.3;
-    }
-    .job-card-title a {
-        color: #1a1a2e;
-        text-decoration: none;
-    }
+    .job-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; }
+    .job-card-company { font-size: 0.7rem; font-weight: 600; color: #4CAF50; text-transform: uppercase; }
+    .job-card-badge { font-size: 0.6rem; padding: 2px 10px; border-radius: 20px; font-weight: 600; background: #e8f5e9; color: #2e7d32; }
+    .job-card-title { font-size: 1rem; font-weight: 600; color: #1a1a2e; margin: 4px 0 6px 0; line-height: 1.3; }
+    .job-card-title a { color: #1a1a2e; text-decoration: none; }
     .job-card-title a:hover { color: #4CAF50; }
-    .job-card-summary {
-        font-size: 0.8rem;
-        color: #495057;
-        line-height: 1.5;
-        margin: 6px 0 10px 0;
-        flex-grow: 1;
-        display: -webkit-box;
-        -webkit-line-clamp: 3;
-        -webkit-box-orient: vertical;
-        overflow: hidden;
-    }
-    .job-card-meta {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        font-size: 0.7rem;
-        color: #6c757d;
-        margin: 6px 0 10px 0;
-    }
-    .job-card-meta span {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-    }
-    .job-card-footer {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-top: 8px;
-        padding-top: 10px;
-        border-top: 1px solid #f1f3f5;
-    }
-    .job-card-score {
-        font-weight: 700;
-        font-size: 0.85rem;
-    }
-    .job-card-apply {
-        background: #4CAF50;
-        color: white !important;
-        padding: 5px 14px;
-        border-radius: 6px;
-        text-decoration: none;
-        font-size: 0.75rem;
-        font-weight: 600;
-        transition: background 0.2s;
-    }
+    .job-card-summary { font-size: 0.8rem; color: #495057; line-height: 1.5; margin: 6px 0 10px 0; flex-grow: 1; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .job-card-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 0.7rem; color: #6c757d; margin: 6px 0 10px 0; }
+    .job-card-meta span { display: flex; align-items: center; gap: 4px; }
+    .job-card-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; padding-top: 10px; border-top: 1px solid #f1f3f5; }
+    .job-card-score { font-weight: 700; font-size: 0.85rem; }
+    .job-card-apply { background: #4CAF50; color: white !important; padding: 5px 14px; border-radius: 6px; text-decoration: none; font-size: 0.75rem; font-weight: 600; }
     .job-card-apply:hover { background: #388E3C; }
     .dark .stApp { background: #0e1117; }
     .dark .header { background: #1a1e27; border-color: #2d2d3d; }
@@ -154,10 +84,7 @@ st.markdown("""
     .dark .job-card-summary { color: #adb5bd; }
     .dark .job-card-meta { color: #868e96; }
     .dark .stats span { color: #868e96; }
-    @media (max-width: 768px) {
-        .header { flex-direction: column; align-items: flex-start; }
-        .stats { flex-wrap: wrap; }
-    }
+    @media (max-width: 768px) { .header { flex-direction: column; align-items: flex-start; } .stats { flex-wrap: wrap; } }
 </style>
 """, unsafe_allow_html=True)
 
@@ -168,7 +95,6 @@ if dark_mode:
     st.markdown('<div class="dark">', unsafe_allow_html=True)
 
 # ─── DATABASE FUNCTIONS ───
-@st.cache_resource
 def get_db():
     return sqlite3.connect(DB_PATH)
 
@@ -215,7 +141,8 @@ def load_jobs():
     conn.close()
     if df.empty:
         return df
-    df['status'] = df['status'].fillna('new').replace('', 'new')
+    df['status'] = df['status'].fillna('new')
+    df['status'] = df['status'].replace('', 'new')
     df['type'] = df['type'].fillna('job')
     df['score'] = df['score'].fillna(0).astype(int)
     df['seen_at'] = df['seen_at'].fillna(datetime.now().isoformat())
@@ -237,17 +164,20 @@ def run_scraper():
             st.success("✅ Scraper finished!")
             st.cache_data.clear()
             return True
-        st.error(f"❌ Scraper failed:\n{result.stderr}")
+        st.error(f"❌ Scraper failed")
         return False
 
-# ─── MIGRATE & LOAD ───
+# ─── LOAD DATA ───
 migrate_db()
 df = load_jobs()
 total_jobs = len(df)
 
-# ─── COMPUTE STATISTICS SAFELY ───
-avg_score = df['score'].mean() if not df.empty else 0
-new_count = len(df[df['status'] == 'new']) if not df.empty else 0
+# ─── COMPUTE STATISTICS ───
+avg_score = 0
+new_count = 0
+if not df.empty:
+    avg_score = df['score'].mean()
+    new_count = len(df[df['status'] == 'new'])
 
 # ─── HEADER ───
 st.markdown(f"""
@@ -262,7 +192,7 @@ st.markdown(f"""
     <div class="stats">
         <span>📊 <strong>{total_jobs}</strong> jobs</span>
         <span>🆕 <strong>{new_count}</strong> new</span>
-        <span>⭐ <strong>{(avg_score):.1f}</strong> avg score</span>
+        <span>⭐ <strong>{avg_score:.1f}</strong> avg score</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -270,38 +200,21 @@ st.markdown(f"""
 # ─── SIDEBAR ───
 with st.sidebar:
     st.header("🔍 Filters")
-    
-    status_filter = st.multiselect(
-        "Status",
-        ["new", "viewed", "applied", "interview", "offer", "rejected"],
-        default=["new", "viewed", "applied"]
-    )
-    
+    status_filter = st.multiselect("Status", ["new","viewed","applied","interview","offer","rejected"], default=["new","viewed","applied"])
     min_score = st.slider("⭐ Min Score", 0, 100, 0)
-    
-    job_type = st.multiselect("Type", ["job", "task"], default=["job", "task"])
-    
-    date_range = st.selectbox("Date Range", ["All", "7 days", "30 days", "90 days"], index=0)
-    
-    search = st.text_input("🔎 Search", placeholder="Search jobs...")
-    
-    sort_by = st.selectbox(
-        "Sort by",
-        ["Highest Score", "Most Recent", "Easiest First"],
-        index=0
-    )
-    
+    job_type = st.multiselect("Type", ["job","task"], default=["job","task"])
+    date_range = st.selectbox("Date Range", ["All","7 days","30 days","90 days"], index=0)
+    search = st.text_input("🔎 Search", placeholder="Search...")
+    sort_by = st.selectbox("Sort by", ["Highest Score","Most Recent","Easiest First"], index=0)
     st.markdown("---")
-    
     if st.button("🔄 Refresh Jobs", use_container_width=True):
         if run_scraper():
             st.rerun()
-    
     if st.button("📥 Export CSV", use_container_width=True):
         csv = df.to_csv(index=False)
         st.download_button("Download", csv, "jobs.csv", "text/csv")
 
-# ─── FILTER DATA ───
+# ─── FILTER ───
 if df.empty:
     st.warning("📭 No jobs found. Run the scraper first.")
     if st.button("🚀 Run Scraper Now"):
@@ -310,7 +223,6 @@ if df.empty:
     st.stop()
 
 filtered = df.copy()
-
 if status_filter:
     filtered = filtered[filtered['status'].isin(status_filter)]
 if min_score:
@@ -376,7 +288,6 @@ if not page_df.empty:
 else:
     st.info("No jobs match your filters. Try adjusting them.")
 
-# ─── FOOTER ───
 st.markdown("---")
 st.caption(f"❤️ Remote Lover · Updated: {datetime.now().strftime('%H:%M:%S')}")
 
