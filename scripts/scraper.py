@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Remote Opportunity Hunter v32.0 – ADVANCED
+Remote Opportunity Hunter v35.0 – COMPLETE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Features:
   • 14+ sources (RemoteOK, Remotive, Himalayas, WeWorkRemotely, JobSpy,
@@ -34,8 +34,11 @@ from difflib import SequenceMatcher
 import xml.etree.ElementTree as ET
 
 # ─── ENVIRONMENT VARIABLES ───
-from dotenv import load_dotenv
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # ─── REQUESTS ───
 try:
@@ -380,8 +383,6 @@ def update_source_reputation(source, success):
     return rep[source].get("active", True)
 
 # ─── FETCHERS ───
-# (All fetchers are implemented – same as v31.0)
-# For brevity, I'll include the essential ones and note the rest.
 
 def fetch_remoteok():
     if requests is None:
@@ -841,3 +842,24 @@ def fetch_yc_jobs():
     return []
 
 def fetch_wellfound():
+    """Fetch jobs from Wellfound (AngelList). Requires BeautifulSoup."""
+    if requests is None:
+        return []
+    try:
+        from bs4 import BeautifulSoup
+        HAS_BS4 = True
+    except ImportError:
+        log.warning("   ⚠️ BeautifulSoup not installed. Wellfound skipped.")
+        return []
+    try:
+        resp = requests.get("https://wellfound.com/roles", headers=random_headers(), timeout=20)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            jobs = []
+            for card in soup.select(".role-card"):
+                title_elem = card.select_one(".role-title")
+                company_elem = card.select_one(".company-name")
+                link_elem = card.select_one("a")
+                if title_elem and company_elem and link_elem:
+                    jobs.append({
+                        "id": f"wf_{hash
