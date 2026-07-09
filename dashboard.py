@@ -1,4 +1,4 @@
-# dashboard.py – Remote Lover v3.2 (Working)
+# dashboard.py – Remote Lover v6.0 (Ultimate)
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -7,16 +7,18 @@ import subprocess
 import os
 from pathlib import Path
 
+# ─── PAGE CONFIG ───
 st.set_page_config(
     page_title="Remote Lover",
     page_icon="❤️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 DB_PATH = Path("data/jobs.db")
 PAGE_SIZE = 12
 
-# ─── CSS ───
+# ─── CUSTOM CSS ───
 st.markdown("""
 <style>
     .stApp { background: #f5f7fa; }
@@ -33,14 +35,7 @@ st.markdown("""
         gap: 12px;
     }
     .header-left { display: flex; align-items: center; gap: 14px; }
-    .logo {
-        background: linear-gradient(135deg, #4CAF50, #2196F3);
-        border-radius: 10px;
-        padding: 8px 14px;
-        color: white;
-        font-weight: 700;
-        font-size: 1.1rem;
-    }
+    .logo { background: linear-gradient(135deg, #4CAF50, #2196F3); border-radius: 10px; padding: 8px 14px; color: white; font-weight: 700; font-size: 1.1rem; }
     .title { font-size: 1.4rem; font-weight: 700; color: #1a1a2e; margin: 0; }
     .title span { color: #4CAF50; }
     .subtitle { font-size: 0.8rem; color: #6c757d; margin: 0; }
@@ -52,17 +47,14 @@ st.markdown("""
         border-radius: 10px;
         padding: 16px 18px;
         border: 1px solid #e9ecef;
+        transition: all 0.2s ease;
         height: 100%;
         display: flex;
         flex-direction: column;
     }
-    .job-card:hover {
-        border-color: #4CAF50;
-        box-shadow: 0 4px 12px rgba(76,175,80,0.1);
-        transform: translateY(-2px);
-    }
+    .job-card:hover { border-color: #4CAF50; box-shadow: 0 4px 12px rgba(76,175,80,0.1); transform: translateY(-2px); }
     .job-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; }
-    .job-card-company { font-size: 0.7rem; font-weight: 600; color: #4CAF50; text-transform: uppercase; }
+    .job-card-company { font-size: 0.7rem; font-weight: 600; color: #4CAF50; text-transform: uppercase; letter-spacing: 0.3px; }
     .job-card-badge { font-size: 0.6rem; padding: 2px 10px; border-radius: 20px; font-weight: 600; background: #e8f5e9; color: #2e7d32; }
     .job-card-title { font-size: 1rem; font-weight: 600; color: #1a1a2e; margin: 4px 0 6px 0; line-height: 1.3; }
     .job-card-title a { color: #1a1a2e; text-decoration: none; }
@@ -72,7 +64,7 @@ st.markdown("""
     .job-card-meta span { display: flex; align-items: center; gap: 4px; }
     .job-card-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; padding-top: 10px; border-top: 1px solid #f1f3f5; }
     .job-card-score { font-weight: 700; font-size: 0.85rem; }
-    .job-card-apply { background: #4CAF50; color: white !important; padding: 5px 14px; border-radius: 6px; text-decoration: none; font-size: 0.75rem; font-weight: 600; }
+    .job-card-apply { background: #4CAF50; color: white !important; padding: 5px 14px; border-radius: 6px; text-decoration: none; font-size: 0.75rem; font-weight: 600; transition: background 0.2s; }
     .job-card-apply:hover { background: #388E3C; }
     .dark .stApp { background: #0e1117; }
     .dark .header { background: #1a1e27; border-color: #2d2d3d; }
@@ -119,7 +111,7 @@ def migrate_db():
         return
     c.execute("PRAGMA table_info(jobs)")
     existing = [row[1] for row in c.fetchall()]
-    required = ["status", "score", "type", "seen_at", "content", "saved"]
+    required = ["status", "score", "type", "seen_at", "content", "saved", "salary_min", "salary_max", "salary_text"]
     for col in required:
         if col not in existing:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT DEFAULT ''")
@@ -141,8 +133,7 @@ def load_jobs():
     conn.close()
     if df.empty:
         return df
-    df['status'] = df['status'].fillna('new')
-    df['status'] = df['status'].replace('', 'new')
+    df['status'] = df['status'].fillna('new').replace('', 'new')
     df['type'] = df['type'].fillna('job')
     df['score'] = df['score'].fillna(0).astype(int)
     df['seen_at'] = df['seen_at'].fillna(datetime.now().isoformat())
@@ -158,26 +149,38 @@ def load_jobs():
     return df
 
 def run_scraper():
-    with st.spinner("🔄 Fetching jobs..."):
+    with st.spinner("🔄 Fetching latest jobs..."):
         result = subprocess.run(["python", "scripts/scraper.py"], capture_output=True, text=True)
         if result.returncode == 0:
             st.success("✅ Scraper finished!")
             st.cache_data.clear()
             return True
-        st.error(f"❌ Scraper failed")
+        st.error("❌ Scraper failed. Check the logs.")
         return False
 
-# ─── LOAD DATA ───
+# ─── AI BLOG (Gemini) ───
+def generate_ai_blog(df):
+    try:
+        import google.generativeai as genai
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            return "⚠️ GEMINI_API_KEY not set."
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-pro')
+        top_companies = df['company'].value_counts().head(5).to_dict()
+        top_roles = df['title'].value_counts().head(5).to_dict()
+        prompt = f"Write a short blog (200 words) about remote job market trends based on: total jobs {len(df)}, top companies {top_companies}, top roles {top_roles}. Use markdown."
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"⚠️ AI blog unavailable: {e}"
+
+# ─── LOAD & MIGRATE ───
 migrate_db()
 df = load_jobs()
 total_jobs = len(df)
-
-# ─── COMPUTE STATISTICS ───
-avg_score = 0
-new_count = 0
-if not df.empty:
-    avg_score = df['score'].mean()
-    new_count = len(df[df['status'] == 'new'])
+avg_score = df['score'].mean() if not df.empty else 0
+new_count = len(df[df['status'] == 'new']) if not df.empty else 0
 
 # ─── HEADER ───
 st.markdown(f"""
@@ -204,7 +207,7 @@ with st.sidebar:
     min_score = st.slider("⭐ Min Score", 0, 100, 0)
     job_type = st.multiselect("Type", ["job","task"], default=["job","task"])
     date_range = st.selectbox("Date Range", ["All","7 days","30 days","90 days"], index=0)
-    search = st.text_input("🔎 Search", placeholder="Search...")
+    search = st.text_input("🔎 Search")
     sort_by = st.selectbox("Sort by", ["Highest Score","Most Recent","Easiest First"], index=0)
     st.markdown("---")
     if st.button("🔄 Refresh Jobs", use_container_width=True):
@@ -213,8 +216,10 @@ with st.sidebar:
     if st.button("📥 Export CSV", use_container_width=True):
         csv = df.to_csv(index=False)
         st.download_button("Download", csv, "jobs.csv", "text/csv")
+    st.markdown("---")
+    st.caption("❤️ Remote Lover · v6.0")
 
-# ─── FILTER ───
+# ─── FILTER DATA ───
 if df.empty:
     st.warning("📭 No jobs found. Run the scraper first.")
     if st.button("🚀 Run Scraper Now"):
@@ -223,12 +228,9 @@ if df.empty:
     st.stop()
 
 filtered = df.copy()
-if status_filter:
-    filtered = filtered[filtered['status'].isin(status_filter)]
-if min_score:
-    filtered = filtered[filtered['score'] >= min_score]
-if job_type:
-    filtered = filtered[filtered['type'].isin(job_type)]
+if status_filter: filtered = filtered[filtered['status'].isin(status_filter)]
+if min_score: filtered = filtered[filtered['score'] >= min_score]
+if job_type: filtered = filtered[filtered['type'].isin(job_type)]
 if date_range != "All":
     days = int(date_range.split()[0])
     cutoff = datetime.now() - timedelta(days=days)
@@ -238,23 +240,16 @@ if search:
         filtered['title'].str.lower().str.contains(search.lower(), na=False) |
         filtered['company'].str.lower().str.contains(search.lower(), na=False)
     ]
-
-if sort_by == "Highest Score":
-    filtered = filtered.sort_values('score', ascending=False)
-elif sort_by == "Most Recent":
-    filtered = filtered.sort_values('seen_at', ascending=False)
-else:
-    filtered = filtered.sort_values(['type', 'score'], ascending=[True, False])
+if sort_by == "Highest Score": filtered = filtered.sort_values('score', ascending=False)
+elif sort_by == "Most Recent": filtered = filtered.sort_values('seen_at', ascending=False)
+else: filtered = filtered.sort_values(['type', 'score'], ascending=[True, False])
 
 total_filtered = len(filtered)
-
-# ─── PAGINATION ───
 total_pages = max(1, (total_filtered + PAGE_SIZE - 1) // PAGE_SIZE)
 page = st.number_input("Page", min_value=1, max_value=total_pages, value=1, step=1)
 start_idx = (page - 1) * PAGE_SIZE
 end_idx = min(start_idx + PAGE_SIZE, total_filtered)
 page_df = filtered.iloc[start_idx:end_idx]
-
 st.caption(f"Showing {len(page_df)} of {total_filtered} jobs (Page {page}/{total_pages})")
 
 # ─── JOB CARDS ───
@@ -286,8 +281,26 @@ if not page_df.empty:
             </div>
             """, unsafe_allow_html=True)
 else:
-    st.info("No jobs match your filters. Try adjusting them.")
+    st.info("No jobs match your filters.")
 
+# ─── AI BLOG EXPANDER ───
+with st.expander("📝 AI Job Market Blog", expanded=False):
+    if st.button("Generate Blog"):
+        with st.spinner("Thinking..."):
+            blog = generate_ai_blog(df)
+            st.markdown(blog)
+
+# ─── ARCHIVED JOBS EXPANDER ───
+with st.expander("📦 Archived Jobs (90+ days old)", expanded=False):
+    conn = get_db()
+    archived_df = pd.read_sql_query("SELECT title, company, location, posted_at, archived_at FROM jobs_archive LIMIT 100", conn)
+    conn.close()
+    if not archived_df.empty:
+        st.dataframe(archived_df, use_container_width=True)
+    else:
+        st.info("No archived jobs yet.")
+
+# ─── FOOTER ───
 st.markdown("---")
 st.caption(f"❤️ Remote Lover · Updated: {datetime.now().strftime('%H:%M:%S')}")
 
