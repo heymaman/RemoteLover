@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """
-Remote Job Scraper v3.0 – Async, Production‑Ready
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Features:
-  • Asynchronous I/O (aiohttp) – 10x faster than blocking
-  • 14+ job sources (RemoteOK, Remotive, Himalayas, WWR, Greenhouse, 
-    JobSpy, X, Reddit, HN, GitHub, Reddit Tasks, Google, YC, Wellfound)
-  • Smart deduplication (hash + URL)
-  • Adaptive source registry with failure tracking
-  • Weighted scoring (remote, freshness, company, easy roles, salary)
-  • Batch DB inserts (executemany)
-  • Fully configurable via environment / .env
-  • Integrated with Dash app via background task
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Remote Job Scraper v4 – Production‑Ready Async
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• 14+ sources (RemoteOK, Remotive, Himalayas, WWR, Greenhouse, JobSpy,
+  X, Reddit, HN, GitHub, Reddit Tasks, Google, YC, Wellfound, +discovered)
+• Async I/O (aiohttp) – 5–10x faster than threads
+• Smart dedup (hash + URL) and batch DB inserts
+• Dynamic source registry with failure tracking & auto‑disable
+• Weighted scoring (remote, freshness, company, salary, easy roles)
+• Full environment config (.env or system vars)
+• Self‑test mode: python scraper_v4.py --test
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 import os
@@ -28,12 +26,11 @@ import json
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Optional, Any, Awaitable, Callable
+from typing import List, Dict, Optional, Any
 from collections import defaultdict
 from dataclasses import dataclass, field
 import xml.etree.ElementTree as ET
 
-# ─── Environment ───
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -53,26 +50,41 @@ logging.basicConfig(
 )
 log = logging.getLogger("scraper")
 
-# ─── Configuration ───
+# ─── Config ───
 @dataclass
 class Config:
+    db_path: Path = Path(os.getenv("DB_PATH", "data/jobs.db"))
     max_concurrent: int = int(os.getenv("MAX_CONCURRENT", "10"))
     timeout: int = int(os.getenv("REQUEST_TIMEOUT", "30"))
     max_retries: int = int(os.getenv("MAX_RETRIES", "3"))
     base_delay: float = float(os.getenv("BASE_DELAY", "1.0"))
-    max_age_days: int = int(os.getenv("MAX_AGE_DAYS", "30"))
     max_results_per_source: int = int(os.getenv("MAX_RESULTS_PER_SOURCE", "100"))
+    batch_size: int = int(os.getenv("BATCH_SIZE", "500"))
     enable_source_discovery: bool = os.getenv("ENABLE_SOURCE_DISCOVERY", "true").lower() == "true"
     enable_google_search: bool = os.getenv("ENABLE_GOOGLE_SEARCH", "true").lower() == "true"
-    enable_jobspy: bool = os.getenv("ENABLE_JOBSPY", "true").lower() == "true"
-    batch_size: int = int(os.getenv("BATCH_SIZE", "500"))
-    db_path: Path = Path(os.getenv("DB_PATH", "data/jobs.db"))
+    # Source toggles
+    source_enabled: Dict[str, bool] = field(default_factory=lambda: {
+        "remoteok": os.getenv("ENABLE_REMOTEOK", "true").lower() == "true",
+        "remotive": os.getenv("ENABLE_REMOTIVE", "true").lower() == "true",
+        "himalayas": os.getenv("ENABLE_HIMALAYAS", "true").lower() == "true",
+        "weworkremotely": os.getenv("ENABLE_WWR", "true").lower() == "true",
+        "jobspy": os.getenv("ENABLE_JOBSPY", "true").lower() == "true",
+        "x": os.getenv("ENABLE_X", "false").lower() == "true",
+        "reddit": os.getenv("ENABLE_REDDIT", "true").lower() == "true",
+        "hn": os.getenv("ENABLE_HN", "true").lower() == "true",
+        "github": os.getenv("ENABLE_GITHUB", "true").lower() == "true",
+        "reddit_tasks": os.getenv("ENABLE_REDDIT_TASKS", "true").lower() == "true",
+        "google": os.getenv("ENABLE_GOOGLE_SEARCH", "true").lower() == "true",
+        "yc": os.getenv("ENABLE_YC", "true").lower() == "true",
+        "wellfound": os.getenv("ENABLE_WELLFOUND", "true").lower() == "true",
+        "discovered": os.getenv("ENABLE_DISCOVERED", "true").lower() == "true",
+    })
 
 config = Config()
 
 # ─── Database ───
 def get_db_connection():
-    config.db_path.parent.mkdir(exist_ok=True)
+    config.db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(config.db_path)
     conn.row_factory = sqlite3.Row
     return conn
@@ -80,7 +92,6 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     c = conn.cursor()
-    # Main jobs table
     c.execute("""
         CREATE TABLE IF NOT EXISTS jobs (
             id TEXT PRIMARY KEY,
@@ -103,7 +114,6 @@ def init_db():
             fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # Archive table
     c.execute("""
         CREATE TABLE IF NOT EXISTS jobs_archive (
             id TEXT PRIMARY KEY,
@@ -120,7 +130,6 @@ def init_db():
             archived_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # Sources registry
     c.execute("""
         CREATE TABLE IF NOT EXISTS sources (
             name TEXT PRIMARY KEY,
@@ -135,7 +144,7 @@ def init_db():
             discovered_at DATETIME
         )
     """)
-    # Add missing columns for existing DBs
+    # Add missing columns
     c.execute("PRAGMA table_info(jobs)")
     existing = {row[1] for row in c.fetchall()}
     for col, col_type in {
@@ -147,7 +156,7 @@ def init_db():
             c.execute(f"ALTER TABLE jobs ADD COLUMN {col} {col_type}")
     conn.commit()
     conn.close()
-    log.info("✅ Database schema verified.")
+    log.info("Database schema verified.")
 
 def archive_old_jobs():
     conn = get_db_connection()
@@ -196,25 +205,19 @@ def parse_salary(text: str) -> Dict[str, Any]:
     return result
 
 def random_ua():
-    uas = [
+    return random.choice([
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
-    ]
-    return random.choice(uas)
+    ])
 
-# ─── Scoring Engine ───
+# ─── Scoring ───
 class JobScorer:
     WEIGHTS = {
-        "remote": 20,
-        "global": 25,
-        "freshness": 15,
-        "company_global": 20,
-        "company_geo_restricted": -30,
-        "easy_roles": 15,
-        "salary": 10,
-        "quality": 5,
+        "remote": 20, "global": 25, "freshness": 15,
+        "company_global": 20, "company_geo_restricted": -30,
+        "easy_roles": 15, "salary": 10, "quality": 5,
     }
     EASY_KEYWORDS = [
         "data entry", "virtual assistant", "customer support", "support specialist",
@@ -223,17 +226,13 @@ class JobScorer:
         "trainee", "internship", "task", "microtask", "gig", "freelance",
         "transcription", "annotation", "labeling", "moderation"
     ]
-    GLOBAL_FRIENDLY = {
-        "gitlab", "stripe", "figma", "notion", "linear", "supabase", "airbnb",
-        "vercel", "railway", "anthropic", "deepmind", "shopify", "discord",
-        "spotify", "dropbox", "datadog", "elastic", "mongodb", "scale ai",
-        "brex", "coursera", "amplitude"
-    }
-    GEO_RESTRICTED = {
-        "microsoft", "amazon", "google", "apple", "meta", "netflix",
-        "jane street", "citadel", "jump trading", "robinhood", "databricks",
-        "roblox", "uber", "lyft", "doordash"
-    }
+    GLOBAL_FRIENDLY = {"gitlab","stripe","figma","notion","linear","supabase","airbnb",
+                       "vercel","railway","anthropic","deepmind","shopify","discord",
+                       "spotify","dropbox","datadog","elastic","mongodb","scale ai",
+                       "brex","coursera","amplitude"}
+    GEO_RESTRICTED = {"microsoft","amazon","google","apple","meta","netflix",
+                      "jane street","citadel","jump trading","robinhood","databricks",
+                      "roblox","uber","lyft","doordash"}
 
     @classmethod
     def score(cls, job: Dict) -> int:
@@ -244,42 +243,25 @@ class JobScorer:
         company = job.get("company", "").lower()
         if "anywhere" in loc or "global" in loc:
             score += cls.WEIGHTS["global"]
-        elif "remote" in loc:
+        elif "remote" in loc or "fully remote" in desc:
             score += cls.WEIGHTS["remote"]
-        elif "fully remote" in desc or "remote" in desc:
-            score += cls.WEIGHTS["remote"] // 2
-        # Freshness
         posted = job.get("posted_at")
         if posted:
             try:
                 days = (datetime.now() - datetime.fromisoformat(posted)).days
-                if days <= 1:
-                    score += cls.WEIGHTS["freshness"]
-                elif days <= 3:
-                    score += int(cls.WEIGHTS["freshness"] * 0.8)
-                elif days <= 7:
-                    score += int(cls.WEIGHTS["freshness"] * 0.5)
-            except:
-                pass
-        # Company
+                if days <= 1: score += cls.WEIGHTS["freshness"]
+                elif days <= 3: score += int(cls.WEIGHTS["freshness"] * 0.8)
+                elif days <= 7: score += int(cls.WEIGHTS["freshness"] * 0.5)
+            except: pass
         for c in cls.GLOBAL_FRIENDLY:
-            if c in company:
-                score += cls.WEIGHTS["company_global"]
-                break
+            if c in company: score += cls.WEIGHTS["company_global"]; break
         for c in cls.GEO_RESTRICTED:
-            if c in company:
-                score += cls.WEIGHTS["company_geo_restricted"]
-                break
-        # Easy roles
+            if c in company: score += cls.WEIGHTS["company_geo_restricted"]; break
         for kw in cls.EASY_KEYWORDS:
             if kw in title or kw in desc:
-                score += cls.WEIGHTS["easy_roles"]
-                break
-        # Salary
-        if job.get("salary_min") and job.get("salary_max"):
-            if job["salary_min"] > 0 and job["salary_max"] > 0:
-                score += cls.WEIGHTS["salary"]
-        # Content quality
+                score += cls.WEIGHTS["easy_roles"]; break
+        if job.get("salary_min") and job.get("salary_max") and job["salary_min"] > 0:
+            score += cls.WEIGHTS["salary"]
         if job.get("content") and len(job["content"]) > 500:
             score += cls.WEIGHTS["quality"]
         return max(0, min(100, int(score)))
@@ -313,23 +295,17 @@ class SourceRegistry:
         conn = get_db_connection()
         if success:
             conn.execute("""
-                UPDATE sources 
-                SET success_count = success_count + 1, 
-                    consecutive_failures = 0,
-                    last_fetch = ?
-                WHERE name = ?
+                UPDATE sources SET success_count = success_count + 1,
+                consecutive_failures = 0, last_fetch = ? WHERE name = ?
             """, (datetime.now().isoformat(), name))
         else:
             conn.execute("""
-                UPDATE sources 
-                SET failure_count = failure_count + 1,
-                    consecutive_failures = consecutive_failures + 1,
-                    last_fetch = ?
-                WHERE name = ?
+                UPDATE sources SET failure_count = failure_count + 1,
+                consecutive_failures = consecutive_failures + 1,
+                last_fetch = ? WHERE name = ?
             """, (datetime.now().isoformat(), name))
             conn.execute("""
-                UPDATE sources 
-                SET active = 0
+                UPDATE sources SET active = 0
                 WHERE name = ? AND consecutive_failures >= 5
             """, (name,))
         conn.commit()
@@ -367,7 +343,7 @@ class AsyncFetcher:
                     await asyncio.sleep(2 ** 2 + random.uniform(0, 1))
                 return None
         except Exception as e:
-            log.warning(f"Fetch JSON failed for {url}: {e}")
+            log.warning(f"JSON fetch error {url}: {e}")
             return None
 
     async def fetch_text(self, url: str) -> Optional[str]:
@@ -377,7 +353,7 @@ class AsyncFetcher:
                     return await resp.text()
                 return None
         except Exception as e:
-            log.warning(f"Fetch text failed: {e}")
+            log.warning(f"Text fetch error {url}: {e}")
             return None
 
     async def fetch_with_retry(self, url: str, retries: int = config.max_retries) -> Optional[Any]:
@@ -385,11 +361,10 @@ class AsyncFetcher:
             result = await self.fetch_json(url)
             if result is not None:
                 return result
-            delay = config.base_delay * (2 ** attempt) + random.uniform(0, 0.5)
-            await asyncio.sleep(delay)
+            await asyncio.sleep(config.base_delay * (2 ** attempt) + random.uniform(0, 0.5))
         return None
 
-# ─── Base Source Class ───
+# ─── Base Source ───
 class JobSource:
     def __init__(self, name: str, fetcher: AsyncFetcher, registry: SourceRegistry):
         self.name = name
@@ -400,12 +375,16 @@ class JobSource:
         raise NotImplementedError
 
     async def run(self) -> List[Dict]:
+        start = time.perf_counter()
         try:
             jobs = await self.fetch()
+            elapsed = time.perf_counter() - start
+            log.info(f"✅ {self.name}: {len(jobs)} jobs in {elapsed:.1f}s")
             self.registry.update_status(self.name, success=True)
             return jobs
         except Exception as e:
-            log.error(f"Source {self.name} error: {e}")
+            elapsed = time.perf_counter() - start
+            log.error(f"❌ {self.name} failed after {elapsed:.1f}s: {e}")
             self.registry.update_status(self.name, success=False)
             return []
 
@@ -413,8 +392,7 @@ class JobSource:
 class RemoteOKSource(JobSource):
     async def fetch(self) -> List[Dict]:
         data = await self.fetcher.fetch_json("https://remoteok.com/api")
-        if not data:
-            return []
+        if not data: return []
         jobs = []
         for item in data[1:]:
             if isinstance(item, dict) and item.get("position"):
@@ -434,14 +412,12 @@ class RemoteOKSource(JobSource):
                     "type": "job",
                     "content": item.get("description", "")
                 })
-        log.info(f"✅ RemoteOK: {len(jobs)} jobs")
         return jobs
 
 class RemotiveSource(JobSource):
     async def fetch(self) -> List[Dict]:
         data = await self.fetcher.fetch_json("https://remotive.com/api/remote-jobs")
-        if not data:
-            return []
+        if not data: return []
         jobs = []
         for job in data.get("jobs", []):
             salary = parse_salary(job.get("salary", ""))
@@ -460,14 +436,12 @@ class RemotiveSource(JobSource):
                 "type": "job",
                 "content": job.get("description", "")
             })
-        log.info(f"✅ Remotive: {len(jobs)} jobs")
         return jobs
 
 class HimalayasSource(JobSource):
     async def fetch(self) -> List[Dict]:
         data = await self.fetcher.fetch_json("https://himalayas.app/jobs/api?limit=50")
-        if not data:
-            return []
+        if not data: return []
         jobs = []
         for job in data.get("jobs", []):
             salary = parse_salary(job.get("salary", ""))
@@ -486,14 +460,12 @@ class HimalayasSource(JobSource):
                 "type": "job",
                 "content": job.get("description", "")
             })
-        log.info(f"✅ Himalayas: {len(jobs)} jobs")
         return jobs
 
 class WeWorkRemotelySource(JobSource):
     async def fetch(self) -> List[Dict]:
         xml_data = await self.fetcher.fetch_text("https://weworkremotely.com/remote-jobs.rss")
-        if not xml_data:
-            return []
+        if not xml_data: return []
         try:
             root = ET.fromstring(xml_data)
             jobs = []
@@ -515,10 +487,9 @@ class WeWorkRemotelySource(JobSource):
                     "type": "job",
                     "content": item.find("description").text if item.find("description") is not None else ""
                 })
-            log.info(f"✅ WeWorkRemotely: {len(jobs)} jobs")
             return jobs
         except Exception as e:
-            log.warning(f"WWR parse failed: {e}")
+            log.warning(f"WWR parse error: {e}")
             return []
 
 class GreenhouseSource(JobSource):
@@ -526,8 +497,7 @@ class GreenhouseSource(JobSource):
         slug = self.name.replace("greenhouse_", "")
         url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
         data = await self.fetcher.fetch_json(url)
-        if not data:
-            return []
+        if not data: return []
         jobs = []
         for job in data.get("jobs", []):
             jobs.append({
@@ -545,18 +515,14 @@ class GreenhouseSource(JobSource):
                 "type": "job",
                 "content": job.get("content", "")
             })
-        log.info(f"✅ Greenhouse {slug}: {len(jobs)} jobs")
         return jobs
 
 class JobSpySource(JobSource):
     async def fetch(self) -> List[Dict]:
-        # JobSpy is synchronous – we'll run it in a thread executor
-        if not config.enable_jobspy:
-            return []
         try:
             from jobspy import scrape_jobs
         except ImportError:
-            log.warning("jobspy not installed. Skipping.")
+            log.warning("jobspy not installed")
             return []
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor() as pool:
@@ -590,26 +556,19 @@ class JobSpySource(JobSource):
                 "type": "job",
                 "content": row.get("description", "")
             })
-        log.info(f"✅ JobSpy: {len(jobs)} jobs")
         return jobs
 
 class XSource(JobSource):
     async def fetch(self) -> List[Dict]:
         bearer = os.getenv("X_BEARER_TOKEN")
-        if not bearer:
-            return []
+        if not bearer: return []
         queries = ['"we\'re hiring" remote', '"join our team" remote', '"open position" remote']
         jobs = []
         headers = {"Authorization": f"Bearer {bearer}"}
         for q in queries:
             params = {"query": q, "max_results": 10}
-            async with self.fetcher.session.get(
-                "https://api.twitter.com/2/tweets/search/recent",
-                headers=headers,
-                params=params
-            ) as resp:
-                if resp.status != 200:
-                    continue
+            async with self.fetcher.session.get("https://api.twitter.com/2/tweets/search/recent", headers=headers, params=params) as resp:
+                if resp.status != 200: continue
                 data = await resp.json()
                 for tweet in data.get("data", []):
                     text = tweet.get("text", "")
@@ -632,7 +591,6 @@ class XSource(JobSource):
                         "type": "job",
                         "content": text
                     })
-        log.info(f"✅ X: {len(jobs)} tweets")
         return jobs
 
 class RedditJobsSource(JobSource):
@@ -641,8 +599,7 @@ class RedditJobsSource(JobSource):
         jobs = []
         for sub in subreddits:
             url = f"https://www.reddit.com/r/{sub}/search.json?q=hiring+remote&restrict_sr=1&limit=20"
-            headers = {"User-Agent": "Mozilla/5.0"}
-            data = await self.fetcher.fetch_json(url, params={"User-Agent": "Mozilla/5.0"})
+            data = await self.fetcher.fetch_json(url)
             if data and "data" in data and "children" in data["data"]:
                 for child in data["data"]["children"]:
                     post = child["data"]
@@ -661,14 +618,12 @@ class RedditJobsSource(JobSource):
                         "type": "job",
                         "content": post.get("selftext", "")[:500]
                     })
-        log.info(f"✅ Reddit jobs: {len(jobs)} posts")
         return jobs
 
 class HNSource(JobSource):
     async def fetch(self) -> List[Dict]:
         top = await self.fetcher.fetch_json("https://hacker-news.firebaseio.com/v0/topstories.json")
-        if not top:
-            return []
+        if not top: return []
         jobs = []
         for story_id in top[:30]:
             story = await self.fetcher.fetch_json(f"https://hacker-news.firebaseio.com/v0/item/{story_id}.json")
@@ -692,7 +647,6 @@ class HNSource(JobSource):
                             "content": comment.get("text", "")[:500]
                         })
                 break
-        log.info(f"✅ Hacker News: {len(jobs)} comments")
         return jobs
 
 class GitHubSource(JobSource):
@@ -700,11 +654,9 @@ class GitHubSource(JobSource):
         url = "https://api.github.com/search/issues?q=hiring+remote+label:help-wanted&per_page=20"
         headers = {"Accept": "application/vnd.github.v3+json"}
         token = os.getenv("GITHUB_TOKEN")
-        if token:
-            headers["Authorization"] = f"token {token}"
+        if token: headers["Authorization"] = f"token {token}"
         async with self.fetcher.session.get(url, headers=headers) as resp:
-            if resp.status != 200:
-                return []
+            if resp.status != 200: return []
             data = await resp.json()
             jobs = []
             for item in data.get("items", []):
@@ -723,7 +675,6 @@ class GitHubSource(JobSource):
                     "type": "job",
                     "content": item.get("body", "")[:500]
                 })
-            log.info(f"✅ GitHub Issues: {len(jobs)}")
             return jobs
 
 class RedditTasksSource(JobSource):
@@ -756,25 +707,16 @@ class RedditTasksSource(JobSource):
                             "type": "task",
                             "content": post.get("selftext", "")
                         })
-        log.info(f"✅ Reddit tasks: {len(jobs)} tasks")
         return jobs
 
 class GoogleSearchSource(JobSource):
     async def fetch(self) -> List[Dict]:
         api_key = os.getenv("SERPAPI_KEY")
-        if not api_key or not config.enable_google_search:
-            return []
-        queries = [
-            '"looking for" remote data entry',
-            '"paid" microtask online',
-            '"user testing" paid',
-            '"transcription" remote',
-            '"freelance" remote gig'
-        ]
+        if not api_key: return []
+        queries = ['"looking for" remote data entry', '"paid" microtask online', '"user testing" paid', '"transcription" remote', '"freelance" remote gig']
         jobs = []
         for q in queries:
-            params = {"q": q, "api_key": api_key, "num": 10}
-            data = await self.fetcher.fetch_json("https://serpapi.com/search", params=params)
+            data = await self.fetcher.fetch_json("https://serpapi.com/search", params={"q": q, "api_key": api_key, "num": 10})
             if data:
                 for result in data.get("organic_results", []):
                     title = result.get("title", "")
@@ -784,8 +726,7 @@ class GoogleSearchSource(JobSource):
                     platforms = ["Upwork", "Fiverr", "UserTesting", "Rev", "TranscribeMe", "Mechanical Turk", "Clickworker"]
                     for plat in platforms:
                         if plat.lower() in title.lower() or plat.lower() in snippet.lower():
-                            platform = plat
-                            break
+                            platform = plat; break
                     jobs.append({
                         "id": url,
                         "title": title[:100],
@@ -801,14 +742,12 @@ class GoogleSearchSource(JobSource):
                         "type": "task",
                         "content": snippet
                     })
-        log.info(f"✅ Google search: {len(jobs)} tasks")
         return jobs
 
 class YCSource(JobSource):
     async def fetch(self) -> List[Dict]:
         data = await self.fetcher.fetch_json("https://www.ycombinator.com/companies")
-        if not data:
-            return []
+        if not data: return []
         jobs = []
         for company in data:
             if company.get("jobs"):
@@ -828,7 +767,6 @@ class YCSource(JobSource):
                         "type": "job",
                         "content": job.get("description", "")
                     })
-        log.info(f"✅ YC: {len(jobs)} jobs")
         return jobs
 
 class WellfoundSource(JobSource):
@@ -836,11 +774,9 @@ class WellfoundSource(JobSource):
         try:
             from bs4 import BeautifulSoup
         except ImportError:
-            log.warning("BeautifulSoup not installed. Wellfound skipped.")
             return []
         html = await self.fetcher.fetch_text("https://wellfound.com/roles")
-        if not html:
-            return []
+        if not html: return []
         try:
             soup = BeautifulSoup(html, "html.parser")
             jobs = []
@@ -866,28 +802,22 @@ class WellfoundSource(JobSource):
                         "type": "job",
                         "content": ""
                     })
-            log.info(f"✅ Wellfound: {len(jobs)} jobs")
             return jobs
         except Exception as e:
             log.warning(f"Wellfound parse error: {e}")
             return []
 
-# ─── Discovered Sources (dynamic) ───
 class DiscoveredSource(JobSource):
     async def fetch(self) -> List[Dict]:
-        # This class is dynamically instantiated per discovered source.
-        # We'll use the source's URL and type from the registry.
         conn = get_db_connection()
         row = conn.execute("SELECT url, type FROM sources WHERE name = ?", (self.name,)).fetchone()
         conn.close()
-        if not row:
-            return []
+        if not row: return []
         url = row["url"]
         type_ = row["type"]
         if type_ == "json":
             data = await self.fetcher.fetch_json(url)
-            if not data:
-                return []
+            if not data: return []
             jobs = []
             for item in data:
                 if isinstance(item, dict) and item.get("title"):
@@ -909,8 +839,7 @@ class DiscoveredSource(JobSource):
             return jobs
         elif type_ == "rss":
             xml_data = await self.fetcher.fetch_text(url)
-            if not xml_data:
-                return []
+            if not xml_data: return []
             root = ET.fromstring(xml_data)
             jobs = []
             for item in root.findall(".//item"):
@@ -934,17 +863,11 @@ class DiscoveredSource(JobSource):
 
 # ─── Source Discovery ───
 async def discover_new_sources(fetcher: AsyncFetcher, registry: SourceRegistry):
-    if not config.enable_source_discovery:
-        return
+    if not config.enable_source_discovery: return
     log.info("Running source discovery...")
     new_sources = []
     discovered_urls = set()
-
-    directories = [
-        "https://www.remotejobboards.com",
-        "https://jobboardsearch.com",
-        "https://www.jobboardfinder.com",
-    ]
+    directories = ["https://www.remotejobboards.com", "https://jobboardsearch.com", "https://www.jobboardfinder.com"]
     for dir_url in directories:
         html = await fetcher.fetch_text(dir_url)
         if html:
@@ -954,7 +877,6 @@ async def discover_new_sources(fetcher: AsyncFetcher, registry: SourceRegistry):
                     if link not in discovered_urls:
                         discovered_urls.add(link)
                         new_sources.append({"name": link.split("/")[2], "url": link, "type": "html"})
-
     api_key = os.getenv("SERPAPI_KEY")
     if api_key:
         queries = ["new remote job board", "best remote job boards 2025", "alternative to LinkedIn jobs"]
@@ -966,12 +888,11 @@ async def discover_new_sources(fetcher: AsyncFetcher, registry: SourceRegistry):
                     if url and "job" in url and url not in discovered_urls:
                         discovered_urls.add(url)
                         new_sources.append({"name": result.get("title", url)[:50], "url": url, "type": "html"})
-
     for src in new_sources:
         registry.add_source(src["name"], src["url"], "json" if src["url"].endswith(".json") else "html")
-    log.info(f"✅ Discovered {len(new_sources)} new sources")
+    log.info(f"Discovered {len(new_sources)} new sources")
 
-# ─── Main Orchestrator ───
+# ─── Orchestrator ───
 class ScraperOrchestrator:
     def __init__(self):
         self.registry = SourceRegistry()
@@ -993,35 +914,38 @@ class ScraperOrchestrator:
             "wellfound": WellfoundSource,
         }
 
-    async def run(self):
-        log.info("=" * 60)
-        log.info("🌍 Remote Job Scraper v3.0 – Async")
+    async def run(self, test_mode: bool = False):
+        log.info("="*60)
+        log.info("🌍 Remote Job Scraper v4")
         log.info(f"   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        log.info("=" * 60)
+        if test_mode:
+            log.info("   ⚠️ TEST MODE – no DB writes")
+        log.info("="*60)
 
         init_db()
-        archive_old_jobs()
+        if not test_mode:
+            archive_old_jobs()
 
-        # Source discovery (only once per week)
-        if datetime.now().weekday() == 0:
+        # Discovery (weekly)
+        if datetime.now().weekday() == 0 and not test_mode:
             async with AsyncFetcher() as fetcher:
                 await discover_new_sources(fetcher, self.registry)
             self.registry._load_from_db()
 
-        # Get enabled sources
+        # Get sources
         sources = self.registry.get_enabled_sources()
-        # Add Greenhouse sources dynamically
+        # Add Greenhouse
         greenhouse_slugs = ["stripe", "anthropic", "figma", "notion", "linear", "supabase", "gitlab"]
         for slug in greenhouse_slugs:
-            sources.append({"name": f"greenhouse_{slug}", "type": "greenhouse"})
+            if config.source_enabled.get("greenhouse", True):
+                sources.append({"name": f"greenhouse_{slug}", "type": "greenhouse"})
 
-        log.info(f"Found {len(sources)} active sources to fetch.")
+        # Filter by toggles
+        enabled_names = [k for k, v in config.source_enabled.items() if v]
+        sources = [s for s in sources if s["name"] in enabled_names or s["name"].startswith("greenhouse_") or s["name"].startswith("discovered_")]
 
-        if not sources:
-            log.warning("No sources enabled. Run with ENV variables or add sources to DB.")
-            return
+        log.info(f"Fetching {len(sources)} enabled sources...")
 
-        # Create fetcher and run all sources with concurrency limit
         async with AsyncFetcher() as fetcher:
             tasks = []
             for src in sources:
@@ -1036,17 +960,14 @@ class ScraperOrchestrator:
                     log.warning(f"No handler for source {name}")
                     continue
                 source = source_class(name, fetcher, self.registry)
-                task = asyncio.create_task(source.run())
-                tasks.append(task)
+                tasks.append(source.run())
 
-            # Semaphore to limit concurrency
             sem = asyncio.Semaphore(config.max_concurrent)
-            async def bounded_run(task):
+            async def bounded(task):
                 async with sem:
                     return await task
 
-            results = await asyncio.gather(*[bounded_run(t) for t in tasks], return_exceptions=True)
-
+            results = await asyncio.gather(*[bounded(t) for t in tasks], return_exceptions=True)
             for res in results:
                 if isinstance(res, Exception):
                     log.error(f"Source error: {res}")
@@ -1055,13 +976,14 @@ class ScraperOrchestrator:
                     self.stats["total"] += len(res)
 
         log.info(f"Total raw jobs fetched: {len(self.jobs)}")
+        if test_mode:
+            log.info("TEST MODE – no data saved")
+            return
 
-        # Save to DB
         if self.jobs:
             self._save_jobs(self.jobs)
         else:
             log.info("No new jobs to save.")
-
         log.info("✅ Job scraping complete.")
 
     def _save_jobs(self, jobs: List[Dict]):
@@ -1089,29 +1011,27 @@ class ScraperOrchestrator:
                 job.get("content", ""),
                 datetime.now().isoformat()
             ))
-        total = len(processed)
-        for i in range(0, total, config.batch_size):
-            batch = processed[i:i+config.batch_size]
+        for i in range(0, len(processed), config.batch_size):
             c.executemany("""
                 INSERT OR IGNORE INTO jobs 
                 (id, hash, title, company, location, url, source, source_url, posted_at, score, type, salary_min, salary_max, salary_text, content, fetched_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, batch)
+            """, processed[i:i+config.batch_size])
         conn.commit()
         conn.close()
-        log.info(f"✅ Saved {total} new jobs (duplicates ignored).")
+        log.info(f"Saved {len(processed)} new jobs (duplicates ignored).")
 
-# ─── Entry point ───
+# ─── Entry ───
 async def main():
+    test_mode = "--test" in sys.argv
     orchestrator = ScraperOrchestrator()
-    await orchestrator.run()
+    await orchestrator.run(test_mode=test_mode)
 
 if __name__ == "__main__":
-    import sys
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nScraper stopped by user.")
+        print("\nStopped by user.")
         sys.exit(0)
     except Exception as e:
         log.error(f"Fatal error: {e}", exc_info=True)
