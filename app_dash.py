@@ -1,4 +1,4 @@
-# app_dash.py – Remote Lover Professional Dash Dashboard
+# app_dash.py – Remote Lover v2.0 (Works with Your Existing Scraper)
 import dash
 from dash import dcc, html, Input, Output, State, callback, no_update
 import dash_bootstrap_components as dbc
@@ -14,10 +14,41 @@ import plotly.express as px
 DB_PATH = Path("data/jobs.db")
 PAGE_SIZE = 12
 
+# ─── DATABASE MIGRATION (Auto‑fix missing columns) ───
+def migrate_db():
+    if not DB_PATH.exists():
+        return
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'")
+    if not c.fetchone():
+        conn.close()
+        return
+    c.execute("PRAGMA table_info(jobs)")
+    existing = [row[1] for row in c.fetchall()]
+    # Columns the dashboard expects
+    required = {
+        "status": "TEXT DEFAULT 'new'",
+        "type": "TEXT DEFAULT 'job'",
+        "seen_at": "TEXT DEFAULT ''",
+        "content": "TEXT DEFAULT ''",
+        "saved": "TEXT DEFAULT '0'",
+        "salary_min": "INTEGER",
+        "salary_max": "INTEGER",
+        "salary_text": "TEXT DEFAULT ''",
+        "score": "INTEGER DEFAULT 0"
+    }
+    for col, col_type in required.items():
+        if col not in existing:
+            c.execute(f"ALTER TABLE jobs ADD COLUMN {col} {col_type}")
+    conn.commit()
+    conn.close()
+
 # ─── DATA LOADING ───
 def load_jobs():
     if not DB_PATH.exists():
         return pd.DataFrame()
+    migrate_db()  # ensure columns exist before querying
     conn = sqlite3.connect(DB_PATH)
     try:
         df = pd.read_sql_query("""
@@ -27,11 +58,13 @@ def load_jobs():
             FROM jobs
             ORDER BY score DESC
         """, conn)
-    except:
+    except Exception as e:
+        print(f"Query error: {e}")
         df = pd.DataFrame()
     conn.close()
     if df.empty:
         return df
+    # Fill nulls with defaults
     df['status'] = df['status'].fillna('new').replace('', 'new')
     df['type'] = df['type'].fillna('job')
     df['score'] = df['score'].fillna(0).astype(int)
@@ -47,16 +80,45 @@ def load_jobs():
     )
     return df
 
+# ─── INITIAL LOAD ───
 df = load_jobs()
 total_jobs = len(df)
 avg_score = df['score'].mean() if not df.empty else 0
 new_count = len(df[df['status'] == 'new']) if not df.empty else 0
 
-# ─── APP INIT ───
+# ─── APP ───
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
 app.title = "Remote Lover"
 
-# ─── SIDEBAR FILTERS ───
+# ─── JOB CARD ───
+def job_card(job):
+    score = job.get('score', 0)
+    score_color = "#4CAF50" if score >= 70 else "#FF9800" if score >= 40 else "#f44336"
+    return dbc.Card([
+        dbc.CardBody([
+            html.Div([
+                html.Span(job.get('company', 'Unknown'), className="text-muted small text-uppercase fw-bold"),
+                html.Span(job.get('type', 'job').upper(), className="badge bg-success ms-2")
+            ], className="d-flex justify-content-between align-items-start"),
+            html.H5(
+                html.A(job.get('title', 'Untitled'), href=job.get('url', '#'), target="_blank", className="text-dark text-decoration-none"),
+                className="mt-2"
+            ),
+            html.P(job.get('summary', ''), className="text-muted small", style={"flex": "1"}),
+            html.Div([
+                html.Span(f"📍 {job.get('location', 'Remote')}", className="me-2"),
+                html.Span(f"💰 {job.get('salary_display', 'N/A')}", className="me-2"),
+                html.Span(f"📡 {job.get('source', '')}", className="me-2"),
+            ], className="text-muted small d-flex flex-wrap gap-2"),
+            html.Hr(),
+            html.Div([
+                html.Span(f"⭐ {score}", style={"color": score_color, "fontWeight": "bold"}),
+                html.A("Apply →", href=job.get('url', '#'), target="_blank", className="btn btn-success btn-sm ms-auto"),
+            ], className="d-flex justify-content-between align-items-center mt-2"),
+        ], className="d-flex flex-column", style={"height": "100%"})
+    ], className="h-100 shadow-sm")
+
+# ─── SIDEBAR ───
 filters_sidebar = html.Div([
     html.H5("🔍 Filters", className="mb-3"),
     html.Label("Status"),
@@ -123,35 +185,7 @@ filters_sidebar = html.Div([
     html.Div(id="export-download", style={"display": "none"}),
 ], style={"padding": "20px"})
 
-# ─── JOB CARD COMPONENT ───
-def job_card(job):
-    score = job.get('score', 0)
-    score_color = "#4CAF50" if score >= 70 else "#FF9800" if score >= 40 else "#f44336"
-    return dbc.Card([
-        dbc.CardBody([
-            html.Div([
-                html.Span(job.get('company', 'Unknown'), className="text-muted small text-uppercase fw-bold"),
-                html.Span(job.get('type', 'job').upper(), className="badge bg-success ms-2")
-            ], className="d-flex justify-content-between align-items-start"),
-            html.H5(
-                html.A(job.get('title', 'Untitled'), href=job.get('url', '#'), target="_blank", className="text-dark text-decoration-none"),
-                className="mt-2"
-            ),
-            html.P(job.get('summary', ''), className="text-muted small", style={"flex": "1"}),
-            html.Div([
-                html.Span(f"📍 {job.get('location', 'Remote')}", className="me-2"),
-                html.Span(f"💰 {job.get('salary_display', 'N/A')}", className="me-2"),
-                html.Span(f"📡 {job.get('source', '')}", className="me-2"),
-            ], className="text-muted small d-flex flex-wrap gap-2"),
-            html.Hr(),
-            html.Div([
-                html.Span(f"⭐ {score}", style={"color": score_color, "fontWeight": "bold"}),
-                html.A("Apply →", href=job.get('url', '#'), target="_blank", className="btn btn-success btn-sm ms-auto"),
-            ], className="d-flex justify-content-between align-items-center mt-2"),
-        ], className="d-flex flex-column", style={"height": "100%"})
-    ], className="h-100 shadow-sm")
-
-# ─── AI BLOG MODAL ───
+# ─── MODALS ───
 ai_blog_modal = dbc.Modal([
     dbc.ModalHeader(dbc.ModalTitle("📝 AI Job Market Blog")),
     dbc.ModalBody(id="ai-blog-content", children="Click 'Generate Blog' to see insights."),
@@ -161,7 +195,6 @@ ai_blog_modal = dbc.Modal([
     ])
 ], id="ai-blog-modal", size="lg", is_open=False)
 
-# ─── ARCHIVED JOBS MODAL ───
 archived_modal = dbc.Modal([
     dbc.ModalHeader(dbc.ModalTitle("📦 Archived Jobs (90+ days old)")),
     dbc.ModalBody(id="archived-jobs-body"),
@@ -172,7 +205,7 @@ archived_modal = dbc.Modal([
 
 # ─── LAYOUT ───
 app.layout = dbc.Container([
-    # ─── HEADER ───
+    # Header
     dbc.Row([
         dbc.Col([
             html.Div([
@@ -192,18 +225,16 @@ app.layout = dbc.Container([
         ], width="auto", className="ms-auto"),
     ], className="bg-white p-3 rounded-3 shadow-sm mb-4 d-flex align-items-center justify-content-between flex-wrap"),
 
-    # ─── MAIN CONTENT ───
+    # Main content
     dbc.Row([
-        # Sidebar (filters)
         dbc.Col(filters_sidebar, xs=12, md=3, lg=2),
-        # Main area (job cards + pagination)
         dbc.Col([
             html.Div(id="job-cards-container"),
             html.Div(id="pagination-controls", className="mt-4"),
         ], xs=12, md=9, lg=10),
     ]),
 
-    # ─── AI BLOG BUTTON ───
+    # AI Blog & Archived buttons
     dbc.Row([
         dbc.Col([
             dbc.Button("📝 AI Job Market Blog", id="open-ai-blog", color="info", className="me-2"),
@@ -211,11 +242,10 @@ app.layout = dbc.Container([
         ], className="text-center mt-4"),
     ]),
 
-    # ─── MODALS ───
     ai_blog_modal,
     archived_modal,
 
-    # ─── FOOTER ───
+    # Footer
     dbc.Row([
         dbc.Col([
             html.Hr(),
@@ -227,7 +257,6 @@ app.layout = dbc.Container([
 
 # ─── CALLBACKS ───
 
-# Dark mode toggle
 @app.callback(
     Output("main-container", "className"),
     Input("dark-mode-toggle", "n_clicks"),
@@ -241,7 +270,6 @@ def toggle_dark(n, current_class):
     else:
         return current_class + " bg-dark text-white"
 
-# Filter and update job cards
 @app.callback(
     Output("job-cards-container", "children"),
     Output("pagination-controls", "children"),
@@ -252,18 +280,13 @@ def toggle_dark(n, current_class):
     Input("search-input", "value"),
     Input("sort-filter", "value"),
     Input("refresh-btn", "n_clicks"),
-    State("main-container", "className"),
 )
-def update_jobs(status, min_score, job_type, date_range, search, sort_by, refresh_clicks, container_class):
-    # Reload data on refresh
-    if refresh_clicks:
-        df_new = load_jobs()
-        if not df_new.empty:
-            # Update global df? We'll just use the new one for this callback.
-            # But we need to propagate. We'll just load inside the callback.
-            pass
-    # Use global df for now
+def update_jobs(status, min_score, job_type, date_range, search, sort_by, refresh_clicks):
     global df
+    if refresh_clicks:
+        # Re-run the scraper
+        subprocess.run(["python", "scripts/scraper.py"], capture_output=True, text=True)
+        df = load_jobs()
     if df.empty:
         return html.Div("No jobs found. Run the scraper."), html.Div()
     
@@ -291,10 +314,8 @@ def update_jobs(status, min_score, job_type, date_range, search, sort_by, refres
         filtered = filtered.sort_values(['type', 'score'], ascending=[True, False])
     
     total = len(filtered)
-    total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE if total > 0 else 1
-    page = 1  # default to first page; we'll add pagination controls with a page number input
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE) if total > 0 else 1
     
-    # Generate cards for first page
     start = 0
     end = PAGE_SIZE
     page_df = filtered.iloc[start:end]
@@ -306,7 +327,6 @@ def update_jobs(status, min_score, job_type, date_range, search, sort_by, refres
     else:
         cards = [html.Div("No jobs match your filters.", className="text-center text-muted")]
     
-    # Pagination controls
     pagination = html.Div([
         html.Div(f"Showing {start+1}–{min(end, total)} of {total} jobs", className="text-muted me-3"),
         dbc.Pagination(
@@ -320,7 +340,6 @@ def update_jobs(status, min_score, job_type, date_range, search, sort_by, refres
     
     return html.Div(cards, className="row"), pagination
 
-# Pagination page change
 @app.callback(
     Output("job-cards-container", "children", allow_duplicate=True),
     Output("pagination-controls", "children", allow_duplicate=True),
@@ -334,7 +353,6 @@ def update_jobs(status, min_score, job_type, date_range, search, sort_by, refres
     prevent_initial_call=True,
 )
 def change_page(page, status, min_score, job_type, date_range, search, sort_by):
-    # Re-filter (duplicate logic – could be refactored)
     global df
     if df.empty:
         return html.Div("No jobs found."), html.Div()
@@ -362,7 +380,7 @@ def change_page(page, status, min_score, job_type, date_range, search, sort_by):
         filtered = filtered.sort_values(['type', 'score'], ascending=[True, False])
     
     total = len(filtered)
-    total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE if total > 0 else 1
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     page = max(1, min(page, total_pages))
     start = (page - 1) * PAGE_SIZE
     end = min(start + PAGE_SIZE, total)
@@ -388,7 +406,6 @@ def change_page(page, status, min_score, job_type, date_range, search, sort_by):
     
     return html.Div(cards, className="row"), pagination
 
-# AI Blog generation
 @app.callback(
     Output("ai-blog-content", "children"),
     Input("generate-blog-btn", "n_clicks"),
@@ -413,7 +430,6 @@ def generate_blog(n):
     except Exception as e:
         return f"⚠️ AI blog unavailable: {e}"
 
-# Open AI Blog modal
 @app.callback(
     Output("ai-blog-modal", "is_open"),
     Input("open-ai-blog", "n_clicks"),
@@ -425,7 +441,6 @@ def toggle_ai_blog(open_clicks, close_clicks, is_open):
         return not is_open
     return is_open
 
-# Archived Jobs
 @app.callback(
     Output("archived-jobs-body", "children"),
     Input("open-archived", "n_clicks"),
@@ -444,7 +459,6 @@ def load_archived(n):
     except:
         return html.Div("Error loading archived jobs.")
 
-# Open Archived modal
 @app.callback(
     Output("archived-modal", "is_open"),
     Input("open-archived", "n_clicks"),
@@ -456,7 +470,6 @@ def toggle_archived(open_clicks, close_clicks, is_open):
         return not is_open
     return is_open
 
-# Export CSV
 @app.callback(
     Output("export-download", "children"),
     Input("export-btn", "n_clicks"),
@@ -473,27 +486,5 @@ def export_csv(n):
         data=dict(content=csv_string, filename=f"remote_jobs_{datetime.now().strftime('%Y%m%d')}.csv")
     )
 
-# Run Scraper (refresh)
-@app.callback(
-    Output("refresh-btn", "children"),
-    Input("refresh-btn", "n_clicks"),
-    prevent_initial_call=True,
-)
-def run_scraper(n):
-    if not n:
-        return "🔄 Refresh Jobs"
-    try:
-        result = subprocess.run(["python", "scripts/scraper.py"], capture_output=True, text=True, timeout=120)
-        if result.returncode == 0:
-            # Reload data
-            global df
-            df = load_jobs()
-            return "✅ Refreshed!"
-        else:
-            return "❌ Failed"
-    except:
-        return "❌ Failed"
-
-# ─── RUN ───
 if __name__ == "__main__":
     app.run_server(debug=True, host="0.0.0.0", port=8050)
