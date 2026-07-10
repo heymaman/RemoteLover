@@ -1,4 +1,17 @@
-# app_dash.py – Remote Lover v3.0 (Fully fixed & improved)
+"""
+Remote Lover – AI‑Powered Job Board
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Features:
+  • Live job feed with filtering (status, score, type, date, search)
+  • AI match scoring (TF‑IDF similarity to a candidate resume)
+  • Non‑blocking background scraper (async via subprocess)
+  • AI blog generation (Gemini)
+  • Dark mode, responsive cards, pagination
+  • Export CSV, archive old jobs, source health dashboard
+  • Built on Dash + Bootstrap
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+
 import dash
 from dash import dcc, html, Input, Output, State, callback, no_update, dash_table
 import dash_bootstrap_components as dbc
@@ -9,65 +22,32 @@ import subprocess
 import os
 from datetime import datetime, timedelta
 import json
+import re
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
 # ─── CONSTANTS ───
 DB_PATH = Path("data/jobs.db")
 PAGE_SIZE = 12
 
-# ─── DATABASE SETUP ───
-def ensure_db():
-    """Create database and table if missing."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+# ─── DATABASE HELPERS ───
+def get_db_connection():
+    DB_PATH.parent.mkdir(exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS jobs (
-            id TEXT PRIMARY KEY,
-            title TEXT,
-            company TEXT,
-            location TEXT,
-            url TEXT,
-            source TEXT,
-            score INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'new',
-            type TEXT DEFAULT 'job',
-            posted_at TEXT,
-            saved TEXT DEFAULT '0',
-            salary_min INTEGER,
-            salary_max INTEGER,
-            salary_text TEXT DEFAULT '',
-            content TEXT DEFAULT '',
-            seen_at TEXT DEFAULT ''
-        )
-    """)
-    # Add missing columns if table existed with fewer columns
-    c.execute("PRAGMA table_info(jobs)")
-    existing = {row[1] for row in c.fetchall()}
-    for col, col_type in {
-        "status": "TEXT DEFAULT 'new'",
-        "type": "TEXT DEFAULT 'job'",
-        "seen_at": "TEXT DEFAULT ''",
-        "content": "TEXT DEFAULT ''",
-        "saved": "TEXT DEFAULT '0'",
-        "salary_min": "INTEGER",
-        "salary_max": "INTEGER",
-        "salary_text": "TEXT DEFAULT ''",
-        "score": "INTEGER DEFAULT 0"
-    }.items():
-        if col not in existing:
-            c.execute(f"ALTER TABLE jobs ADD COLUMN {col} {col_type}")
-    conn.commit()
-    conn.close()
+    conn.row_factory = sqlite3.Row
+    return conn
 
-# ─── DATA LOADING ───
 def load_jobs():
-    ensure_db()
-    conn = sqlite3.connect(DB_PATH)
+    """Load jobs from DB with computed fields."""
+    if not DB_PATH.exists():
+        return pd.DataFrame()
+    conn = get_db_connection()
     try:
         df = pd.read_sql_query("""
             SELECT id, title, company, location, url, source,
                    score, status, type, posted_at, saved,
-                   salary_min, salary_max, salary_text, content, seen_at
+                   salary_min, salary_max, salary_text, content, seen_at, fetched_at
             FROM jobs
             ORDER BY score DESC
         """, conn)
@@ -77,12 +57,10 @@ def load_jobs():
     conn.close()
     if df.empty:
         return df
-    # Cleanup
     df['status'] = df['status'].fillna('new').replace('', 'new')
     df['type'] = df['type'].fillna('job')
     df['score'] = df['score'].fillna(0).astype(int)
     df['seen_at'] = df['seen_at'].fillna(datetime.now().isoformat())
-    # Salary display
     df['salary_display'] = df.apply(
         lambda r: f"${r['salary_min']:,.0f}" if r['salary_min'] and r['salary_min'] == r['salary_max'] else
                   f"${r['salary_min']:,.0f}-${r['salary_max']:,.0f}" if r['salary_min'] and r['salary_max'] else
@@ -94,6 +72,42 @@ def load_jobs():
     )
     return df
 
+# ─── AI MATCHING ENGINE ───
+class MatchEngine:
+    def __init__(self):
+        self.vectorizer = None
+        self.job_vectors = None
+        self.df = None
+
+    def fit(self, df):
+        """Build TF‑IDF matrix from job descriptions."""
+        if df.empty:
+            return
+        texts = df['content'].fillna('').tolist()
+        # Add title and company to improve matching
+        enhanced = [f"{row['title']} {row['company']} {row['content']}".strip() for _, row in df.iterrows()]
+        self.vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
+        self.job_vectors = self.vectorizer.fit_transform(enhanced)
+        self.df = df
+
+    def match_resume(self, resume_text: str, top_n: int = 20) -> pd.DataFrame:
+        """Return jobs with similarity scores."""
+        if self.vectorizer is None or self.job_vectors is None:
+            return pd.DataFrame()
+        resume_vec = self.vectorizer.transform([resume_text])
+        similarities = cosine_similarity(resume_vec, self.job_vectors).flatten()
+        self.df['match_score'] = (similarities * 100).round(2)
+        result = self.df.nlargest(top_n, 'match_score')
+        return result[['id', 'title', 'company', 'match_score', 'score', 'url']]
+
+# Global match engine (initialized on load)
+match_engine = MatchEngine()
+
+# ─── INITIAL DATA LOAD ───
+df = load_jobs()
+if not df.empty:
+    match_engine.fit(df)
+
 # ─── APP ───
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
 app.title = "Remote Lover"
@@ -102,11 +116,16 @@ app.title = "Remote Lover"
 def job_card(job):
     score = job.get('score', 0)
     score_color = "#4CAF50" if score >= 70 else "#FF9800" if score >= 40 else "#f44336"
+    match = job.get('match_score', None)
+    match_badge = ""
+    if match is not None and match > 60:
+        match_badge = html.Span(f"🤖 {match:.0f}% match", className="badge bg-info ms-2")
     return dbc.Card([
         dbc.CardBody([
             html.Div([
                 html.Span(job.get('company', 'Unknown'), className="text-muted small text-uppercase fw-bold"),
-                html.Span(job.get('type', 'job').upper(), className="badge bg-success ms-2")
+                html.Span(job.get('type', 'job').upper(), className="badge bg-success ms-2"),
+                match_badge,
             ], className="d-flex justify-content-between align-items-start"),
             html.H5(
                 html.A(job.get('title', 'Untitled'), href=job.get('url', '#'), target="_blank", className="text-dark text-decoration-none"),
@@ -180,15 +199,23 @@ filters_sidebar = html.Div([
             {"label": "Highest Score", "value": "score"},
             {"label": "Most Recent", "value": "seen_at"},
             {"label": "Easiest First", "value": "easiest"},
+            {"label": "AI Match", "value": "match"},  # New
         ],
         value="score",
         className="mb-3"
     ),
     html.Hr(),
+    html.Label("📄 Paste your resume for AI matching:"),
+    dbc.Textarea(id="resume-text", placeholder="Paste your skills, experience, keywords...", className="mb-2", rows=3),
+    dbc.Button("🔍 Match Jobs", id="match-btn", color="info", className="w-100 mb-3", size="sm"),
+    html.Div(id="match-status", className="text-center small text-muted"),
+    html.Hr(),
     dbc.Button("🔄 Refresh Jobs", id="refresh-btn", color="primary", className="w-100 mb-2"),
-    dbc.Button("📥 Export CSV", id="export-btn", color="secondary", className="w-100"),
-    dcc.Download(id="download-csv"),   # <-- Proper download component
+    dbc.Button("📥 Export CSV", id="export-btn", color="secondary", className="w-100 mb-2"),
+    dbc.Button("📦 Archive Old Jobs", id="archive-btn", color="warning", className="w-100"),
+    dcc.Download(id="download-csv"),
     html.Div(id="refresh-status", className="text-center mt-2 small text-muted"),
+    html.Div(id="archive-status", className="text-center mt-1 small text-muted"),
 ], style={"padding": "20px"})
 
 # ─── MODALS ───
@@ -202,7 +229,7 @@ ai_blog_modal = dbc.Modal([
 ], id="ai-blog-modal", size="lg", is_open=False)
 
 archived_modal = dbc.Modal([
-    dbc.ModalHeader(dbc.ModalTitle("📦 Archived Jobs (90+ days old)")),
+    dbc.ModalHeader(dbc.ModalTitle("📦 Archived Jobs")),
     dbc.ModalBody(id="archived-jobs-body"),
     dbc.ModalFooter([
         dbc.Button("Close", id="close-archived", className="ms-auto", color="secondary"),
@@ -212,8 +239,9 @@ archived_modal = dbc.Modal([
 # ─── LAYOUT ───
 app.layout = dbc.Container([
     # Hidden stores
-    dcc.Store(id="full-data-store", data=[]),      # holds all jobs as JSON
-    dcc.Store(id="filtered-data-store", data=[]),  # holds filtered jobs
+    dcc.Store(id="full-data-store", data=[]),      # all jobs
+    dcc.Store(id="filtered-data-store", data=[]),  # filtered subset
+    dcc.Interval(id="scraper-poll-interval", interval=1000, disabled=True),  # polls scraper
 
     # Header
     dbc.Row([
@@ -263,7 +291,7 @@ app.layout = dbc.Container([
     dbc.Row([
         dbc.Col([
             dbc.Button("📝 AI Job Market Blog", id="open-ai-blog", color="info", className="me-2"),
-            dbc.Button("📦 Archived Jobs", id="open-archived", color="secondary"),
+            dbc.Button("📦 Show Archived Jobs", id="open-archived", color="secondary"),
         ], className="text-center mt-4"),
     ]),
 
@@ -281,10 +309,17 @@ app.layout = dbc.Container([
 ], fluid=True, className="bg-light min-vh-100", id="main-container")
 
 # ─── HELPER: FILTER DATA ───
-def filter_dataframe(df, status, min_score, job_type, date_range, search, sort_by):
+def filter_dataframe(df, status, min_score, job_type, date_range, search, sort_by, match_scores=None):
     if df.empty:
         return df
     filtered = df.copy()
+    # If match_scores provided, add match_score column and sort by it if requested
+    if match_scores is not None and not match_scores.empty:
+        filtered = filtered.merge(match_scores[['id', 'match_score']], on='id', how='left')
+        filtered['match_score'] = filtered['match_score'].fillna(0)
+    else:
+        filtered['match_score'] = 0
+
     if status:
         filtered = filtered[filtered['status'].isin(status)]
     if min_score:
@@ -307,6 +342,8 @@ def filter_dataframe(df, status, min_score, job_type, date_range, search, sort_b
         filtered = filtered.sort_values('seen_at', ascending=False)
     elif sort_by == "easiest":
         filtered = filtered.sort_values(['type', 'score'], ascending=[True, False])
+    elif sort_by == "match" and 'match_score' in filtered.columns:
+        filtered = filtered.sort_values('match_score', ascending=False)
     return filtered
 
 # ─── CALLBACKS ───
@@ -318,27 +355,28 @@ def filter_dataframe(df, status, min_score, job_type, date_range, search, sort_b
     Output("new-jobs-badge", "children"),
     Output("avg-score-badge", "children"),
     Input("refresh-btn", "n_clicks"),
-    prevent_initial_call=False,  # runs on load
+    prevent_initial_call=False,
 )
 def load_initial_data(n_clicks):
-    # On first load or refresh, load from DB
     df = load_jobs()
     if df.empty:
         return [], "📊 0 jobs", "🆕 0 new", "⭐ 0.0 avg"
-    # Update badges
+    # Also update the match engine
+    global match_engine
+    match_engine.fit(df)
+    records = df.to_dict('records')
     total = len(df)
     new_count = len(df[df['status'] == 'new'])
     avg_score = df['score'].mean()
-    # Convert to JSON
-    records = df.to_dict('records')
     return records, f"📊 {total} jobs", f"🆕 {new_count} new", f"⭐ {avg_score:.1f} avg"
 
-# 2. Filter data whenever filters or full data changes
+# 2. Filter data when filters or full data changes
 @app.callback(
     Output("filtered-data-store", "data"),
     Output("pagination-component", "max_value"),
     Output("pagination-component", "active_page"),
     Output("pagination-info", "children"),
+    Output("match-status", "children"),
     Input("full-data-store", "data"),
     Input("status-filter", "value"),
     Input("score-slider", "value"),
@@ -346,26 +384,44 @@ def load_initial_data(n_clicks):
     Input("date-filter", "value"),
     Input("search-input", "value"),
     Input("sort-filter", "value"),
+    Input("match-btn", "n_clicks"),
+    State("resume-text", "value"),
     State("pagination-component", "active_page"),
+    prevent_initial_call=True,
 )
-def update_filtered_data(full_data_json, status, min_score, job_type, date_range, search, sort_by, current_page):
+def update_filtered_data(full_data_json, status, min_score, job_type, date_range, search, sort_by, match_clicks, resume_text, current_page):
     if not full_data_json:
-        return [], 1, 1, "No jobs found"
+        return [], 1, 1, "No jobs found", ""
+
     df = pd.DataFrame(full_data_json)
-    filtered = filter_dataframe(df, status, min_score, job_type, date_range, search, sort_by)
+    match_scores = None
+    match_msg = ""
+
+    # If match button clicked and resume text provided
+    ctx = dash.callback_context
+    if ctx.triggered and ctx.triggered[0]['prop_id'] == 'match-btn.n_clicks' and resume_text:
+        global match_engine
+        if match_engine.df is not None:
+            match_df = match_engine.match_resume(resume_text, top_n=len(df))
+            if not match_df.empty:
+                match_scores = match_df[['id', 'match_score']]
+                match_msg = f"✅ Matched {len(match_df)} jobs"
+            else:
+                match_msg = "⚠️ No matches found"
+        else:
+            match_msg = "⚠️ No job data for matching"
+
+    filtered = filter_dataframe(df, status, min_score, job_type, date_range, search, sort_by, match_scores)
     total = len(filtered)
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE) if total > 0 else 1
-    # Ensure current page is valid
     current_page = min(current_page, total_pages) if current_page else 1
-    # Store filtered data as JSON
     filtered_records = filtered.to_dict('records') if not filtered.empty else []
-    # Update pagination info
     start = (current_page - 1) * PAGE_SIZE
     end = min(start + PAGE_SIZE, total)
     info = f"Showing {start+1}–{end} of {total} jobs" if total > 0 else "No jobs match your filters"
-    return filtered_records, total_pages, current_page, info
+    return filtered_records, total_pages, current_page, info, match_msg
 
-# 3. Render cards based on filtered data and current page
+# 3. Render cards from filtered data
 @app.callback(
     Output("job-cards-container", "children"),
     Input("filtered-data-store", "data"),
@@ -388,35 +444,105 @@ def render_cards(filtered_json, page):
         cards.append(dbc.Col(job_card(job), xs=12, sm=6, lg=4, className="mb-4"))
     return html.Div(cards, className="row")
 
-# 4. Refresh button – run scraper and update full data
+# 4. Refresh button – start scraper asynchronously
+# (We'll reuse the same pattern as before – assuming scraper_v4.py is used)
+scraper_process = None
+scraper_running = False
+
 @app.callback(
+    Output("refresh-status", "children"),
+    Output("scraper-poll-interval", "disabled"),
+    Input("refresh-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def start_scraper(n_clicks):
+    global scraper_process, scraper_running
+    if scraper_running:
+        return "⏳ Already running...", True
+    try:
+        scraper_process = subprocess.Popen(
+            ["python", "scripts/scraper.py"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        scraper_running = True
+        return "⏳ Scraping in progress...", False
+    except Exception as e:
+        return f"❌ Error: {e}", True
+
+# 5. Poll scraper process
+@app.callback(
+    Output("refresh-status", "children", allow_duplicate=True),
+    Output("scraper-poll-interval", "disabled", allow_duplicate=True),
     Output("full-data-store", "data", allow_duplicate=True),
     Output("total-jobs-badge", "children", allow_duplicate=True),
     Output("new-jobs-badge", "children", allow_duplicate=True),
     Output("avg-score-badge", "children", allow_duplicate=True),
-    Output("refresh-status", "children"),
-    Input("refresh-btn", "n_clicks"),
+    Input("scraper-poll-interval", "n_intervals"),
     prevent_initial_call=True,
 )
-def run_scraper(n_clicks):
-    if n_clicks is None:
-        return no_update
-    try:
-        result = subprocess.run(["python", "scripts/scraper.py"], capture_output=True, text=True, timeout=120)
-        if result.returncode != 0:
-            return no_update, no_update, no_update, no_update, "❌ Scraper failed"
-        df = load_jobs()
-        if df.empty:
-            return [], "📊 0 jobs", "🆕 0 new", "⭐ 0.0 avg", "⚠️ No jobs found"
-        records = df.to_dict('records')
-        total = len(df)
-        new_count = len(df[df['status'] == 'new'])
-        avg_score = df['score'].mean()
-        return records, f"📊 {total} jobs", f"🆕 {new_count} new", f"⭐ {avg_score:.1f} avg", "✅ Refreshed!"
-    except Exception as e:
-        return no_update, no_update, no_update, no_update, f"❌ Error: {str(e)}"
+def poll_scraper(n):
+    global scraper_process, scraper_running
+    if not scraper_running or scraper_process is None:
+        return "✅ Idle", True, no_update, no_update, no_update, no_update
 
-# 5. Dark mode toggle
+    retcode = scraper_process.poll()
+    if retcode is None:
+        return no_update, False, no_update, no_update, no_update, no_update
+
+    scraper_running = False
+    stdout, stderr = scraper_process.communicate()
+    if retcode != 0:
+        return f"❌ Failed: {stderr}", True, no_update, no_update, no_update, no_update
+
+    # Success – reload data and update match engine
+    df = load_jobs()
+    if df.empty:
+        return "⚠️ No jobs found", True, [], "📊 0 jobs", "🆕 0 new", "⭐ 0.0 avg"
+    global match_engine
+    match_engine.fit(df)
+    records = df.to_dict('records')
+    total = len(df)
+    new_count = len(df[df['status'] == 'new'])
+    avg_score = df['score'].mean()
+    return "✅ Refreshed!", True, records, f"📊 {total} jobs", f"🆕 {new_count} new", f"⭐ {avg_score:.1f} avg"
+
+# 6. Archive old jobs (synchronous)
+@app.callback(
+    Output("archive-status", "children"),
+    Input("archive-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def archive_old_jobs(n_clicks):
+    if not n_clicks:
+        return ""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        cutoff = (datetime.now() - timedelta(days=90)).isoformat()
+        c.execute("""
+            INSERT INTO jobs_archive (id, hash, title, company, location, url, source, posted_at, score, type, salary_text)
+            SELECT id, hash, title, company, location, url, source, posted_at, score, type, salary_text
+            FROM jobs WHERE seen_at < ?
+        """, (cutoff,))
+        moved = c.rowcount
+        c.execute("DELETE FROM jobs WHERE seen_at < ?", (cutoff,))
+        conn.commit()
+        conn.close()
+        if moved:
+            # Reload data and update store
+            df = load_jobs()
+            if not df.empty:
+                global match_engine
+                match_engine.fit(df)
+            return f"✅ Archived {moved} jobs (older than 90 days)."
+        else:
+            return "ℹ️ No jobs to archive."
+    except Exception as e:
+        return f"❌ Archive error: {e}"
+
+# 7. Dark mode
 @app.callback(
     Output("main-container", "className"),
     Input("dark-mode-toggle", "n_clicks"),
@@ -430,7 +556,7 @@ def toggle_dark(n, current_class):
     else:
         return current_class + " bg-dark text-white"
 
-# 6. AI Blog modal toggle
+# 8. AI Blog modal toggle
 @app.callback(
     Output("ai-blog-modal", "is_open"),
     Input("open-ai-blog", "n_clicks"),
@@ -442,7 +568,7 @@ def toggle_ai_blog(open_clicks, close_clicks, is_open):
         return not is_open
     return is_open
 
-# 7. Generate AI Blog content
+# 9. Generate AI Blog
 @app.callback(
     Output("ai-blog-content", "children"),
     Input("generate-blog-btn", "n_clicks"),
@@ -464,14 +590,15 @@ def generate_blog(n, full_data):
         model = genai.GenerativeModel('gemini-1.5-pro')
         top_companies = df['company'].value_counts().head(5).to_dict()
         top_roles = df['title'].value_counts().head(5).to_dict()
+        avg_score = df['score'].mean()
         total = len(df)
-        prompt = f"Write a short blog (200-300 words) about remote job market trends based on: total jobs {total}, top companies {top_companies}, top roles {top_roles}. Use markdown."
+        prompt = f"Write a short blog (200-300 words) about remote job market trends based on: total jobs {total}, average score {avg_score:.1f}, top companies {top_companies}, top roles {top_roles}. Use markdown."
         response = model.generate_content(prompt)
         return dcc.Markdown(response.text)
     except Exception as e:
         return f"⚠️ AI blog unavailable: {e}"
 
-# 8. Archived modal toggle
+# 10. Archived modal toggle
 @app.callback(
     Output("archived-modal", "is_open"),
     Input("open-archived", "n_clicks"),
@@ -483,7 +610,7 @@ def toggle_archived(open_clicks, close_clicks, is_open):
         return not is_open
     return is_open
 
-# 9. Load archived jobs
+# 11. Load archived jobs
 @app.callback(
     Output("archived-jobs-body", "children"),
     Input("open-archived", "n_clicks"),
@@ -493,8 +620,13 @@ def load_archived(n):
     if not n:
         return html.Div("No archived jobs.")
     try:
-        conn = sqlite3.connect(DB_PATH)
-        archived_df = pd.read_sql_query("SELECT title, company, location, posted_at, archived_at FROM jobs_archive ORDER BY archived_at DESC LIMIT 100", conn)
+        conn = get_db_connection()
+        archived_df = pd.read_sql_query("""
+            SELECT title, company, location, posted_at, archived_at
+            FROM jobs_archive
+            ORDER BY archived_at DESC
+            LIMIT 100
+        """, conn)
         conn.close()
         if archived_df.empty:
             return html.Div("No archived jobs yet.")
@@ -502,7 +634,7 @@ def load_archived(n):
     except Exception:
         return html.Div("Error loading archived jobs.")
 
-# 10. Export CSV
+# 12. Export CSV
 @app.callback(
     Output("download-csv", "data"),
     Input("export-btn", "n_clicks"),
@@ -520,5 +652,6 @@ def export_csv(n_clicks, full_data):
         filename=f"remote_jobs_{datetime.now().strftime('%Y%m%d')}.csv"
     )
 
+# ─── RUN ───
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=8050)
