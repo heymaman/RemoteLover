@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Remote Job Scraper v4 – Production‑Ready Async
+Remote Job Scraper v4 – Production‑Ready Async (FINAL)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • 14+ sources (RemoteOK, Remotive, Himalayas, WWR, Greenhouse, JobSpy,
   X, Reddit, HN, GitHub, Reddit Tasks, Google, YC, Wellfound, +discovered)
@@ -19,7 +19,7 @@ import asyncio
 import aiohttp
 import sqlite3
 import logging
-import logging.handlers  # ✅ FIXED: explicit import of handlers
+import logging.handlers  # ✅ explicitly imported
 import hashlib
 import re
 import random
@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Any
 from collections import defaultdict
 from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor  # ✅ needed for JobSpy
 import xml.etree.ElementTree as ET
 
 try:
@@ -145,7 +146,7 @@ def init_db():
             discovered_at DATETIME
         )
     """)
-    # Add missing columns
+    # Add missing columns to jobs
     c.execute("PRAGMA table_info(jobs)")
     existing = {row[1] for row in c.fetchall()}
     for col, col_type in {
@@ -896,7 +897,8 @@ async def discover_new_sources(fetcher: AsyncFetcher, registry: SourceRegistry):
 # ─── Orchestrator ───
 class ScraperOrchestrator:
     def __init__(self):
-        self.registry = SourceRegistry()
+        # registry will be created later after DB init
+        self.registry = None
         self.jobs = []
         self.stats = defaultdict(int)
         self.source_mapping = {
@@ -923,9 +925,13 @@ class ScraperOrchestrator:
             log.info("   ⚠️ TEST MODE – no DB writes")
         log.info("="*60)
 
+        # ✅ Initialize database FIRST – creates all tables
         init_db()
         if not test_mode:
             archive_old_jobs()
+
+        # ✅ Now instantiate the registry (table 'sources' now exists)
+        self.registry = SourceRegistry()
 
         # Discovery (weekly)
         if datetime.now().weekday() == 0 and not test_mode:
@@ -933,9 +939,9 @@ class ScraperOrchestrator:
                 await discover_new_sources(fetcher, self.registry)
             self.registry._load_from_db()
 
-        # Get sources
+        # Get sources from registry
         sources = self.registry.get_enabled_sources()
-        # Add Greenhouse
+        # Add Greenhouse sources dynamically
         greenhouse_slugs = ["stripe", "anthropic", "figma", "notion", "linear", "supabase", "gitlab"]
         for slug in greenhouse_slugs:
             if config.source_enabled.get("greenhouse", True):
