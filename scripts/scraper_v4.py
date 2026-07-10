@@ -9,7 +9,7 @@ Remote Job Scraper v4 – Production‑Ready Async
 • Dynamic source registry with failure tracking & auto‑disable
 • Weighted scoring (remote, freshness, company, salary, easy roles)
 • Full environment config (.env or system vars)
-• Self‑test mode: python scraper_v4.py --test
+• Self‑test mode: python scraper.py --test
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -19,6 +19,7 @@ import asyncio
 import aiohttp
 import sqlite3
 import logging
+import logging.handlers  # ✅ FIXED: explicit import of handlers
 import hashlib
 import re
 import random
