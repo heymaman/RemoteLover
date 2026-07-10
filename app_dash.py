@@ -1,4 +1,4 @@
-# app_dash.py – Remote Lover v2.0 (Works with Your Existing Scraper)
+# app_dash.py – Remote Lover v2.1 (Fixed for newer Dash versions)
 import dash
 from dash import dcc, html, Input, Output, State, callback, no_update
 import dash_bootstrap_components as dbc
@@ -8,13 +8,12 @@ from pathlib import Path
 import subprocess
 import os
 from datetime import datetime, timedelta
-import plotly.express as px
 
 # ─── CONSTANTS ───
 DB_PATH = Path("data/jobs.db")
 PAGE_SIZE = 12
 
-# ─── DATABASE MIGRATION (Auto‑fix missing columns) ───
+# ─── DATABASE MIGRATION ───
 def migrate_db():
     if not DB_PATH.exists():
         return
@@ -26,7 +25,6 @@ def migrate_db():
         return
     c.execute("PRAGMA table_info(jobs)")
     existing = [row[1] for row in c.fetchall()]
-    # Columns the dashboard expects
     required = {
         "status": "TEXT DEFAULT 'new'",
         "type": "TEXT DEFAULT 'job'",
@@ -48,7 +46,7 @@ def migrate_db():
 def load_jobs():
     if not DB_PATH.exists():
         return pd.DataFrame()
-    migrate_db()  # ensure columns exist before querying
+    migrate_db()
     conn = sqlite3.connect(DB_PATH)
     try:
         df = pd.read_sql_query("""
@@ -64,7 +62,6 @@ def load_jobs():
     conn.close()
     if df.empty:
         return df
-    # Fill nulls with defaults
     df['status'] = df['status'].fillna('new').replace('', 'new')
     df['type'] = df['type'].fillna('job')
     df['score'] = df['score'].fillna(0).astype(int)
@@ -284,7 +281,6 @@ def toggle_dark(n, current_class):
 def update_jobs(status, min_score, job_type, date_range, search, sort_by, refresh_clicks):
     global df
     if refresh_clicks:
-        # Re-run the scraper
         subprocess.run(["python", "scripts/scraper.py"], capture_output=True, text=True)
         df = load_jobs()
     if df.empty:
@@ -486,5 +482,24 @@ def export_csv(n):
         data=dict(content=csv_string, filename=f"remote_jobs_{datetime.now().strftime('%Y%m%d')}.csv")
     )
 
+@app.callback(
+    Output("refresh-btn", "children"),
+    Input("refresh-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def run_scraper(n):
+    if not n:
+        return "🔄 Refresh Jobs"
+    try:
+        result = subprocess.run(["python", "scripts/scraper.py"], capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            global df
+            df = load_jobs()
+            return "✅ Refreshed!"
+        else:
+            return "❌ Failed"
+    except:
+        return "❌ Failed"
+
 if __name__ == "__main__":
-    app.run_server(debug=True, host="0.0.0.0", port=8050)
+    app.run(debug=True, host="0.0.0.0", port=8050)
