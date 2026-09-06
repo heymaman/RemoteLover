@@ -1,308 +1,267 @@
-# dashboard.py – Remote Lover v6.0 (Ultimate)
-import streamlit as st
-import pandas as pd
-import sqlite3
+import aiosqlite
+import asyncio
 from datetime import datetime, timedelta
-import subprocess
-import os
+from typing import List, Optional
 from pathlib import Path
+from models import Job, JobFilter, JobStatus, SourceHealth, Stats
 
-# ─── PAGE CONFIG ───
-st.set_page_config(
-    page_title="Remote Lover",
-    page_icon="❤️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+class Database:
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._conn: Optional[aiosqlite.Connection] = None
 
-DB_PATH = Path("data/jobs.db")
-PAGE_SIZE = 12
+    async def connect(self):
+        self._conn = await aiosqlite.connect(self.db_path)
+        self._conn.row_factory = aiosqlite.Row
+        await self.init_schema()
 
-# ─── CUSTOM CSS ───
-st.markdown("""
-<style>
-    .stApp { background: #f5f7fa; }
-    .header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        background: white;
-        padding: 16px 24px;
-        border-radius: 12px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-        margin-bottom: 20px;
-        flex-wrap: wrap;
-        gap: 12px;
-    }
-    .header-left { display: flex; align-items: center; gap: 14px; }
-    .logo { background: linear-gradient(135deg, #4CAF50, #2196F3); border-radius: 10px; padding: 8px 14px; color: white; font-weight: 700; font-size: 1.1rem; }
-    .title { font-size: 1.4rem; font-weight: 700; color: #1a1a2e; margin: 0; }
-    .title span { color: #4CAF50; }
-    .subtitle { font-size: 0.8rem; color: #6c757d; margin: 0; }
-    .stats { display: flex; gap: 20px; font-size: 0.85rem; flex-wrap: wrap; }
-    .stats span { color: #6c757d; }
-    .stats strong { color: #1a1a2e; }
-    .job-card {
-        background: white;
-        border-radius: 10px;
-        padding: 16px 18px;
-        border: 1px solid #e9ecef;
-        transition: all 0.2s ease;
-        height: 100%;
-        display: flex;
-        flex-direction: column;
-    }
-    .job-card:hover { border-color: #4CAF50; box-shadow: 0 4px 12px rgba(76,175,80,0.1); transform: translateY(-2px); }
-    .job-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; }
-    .job-card-company { font-size: 0.7rem; font-weight: 600; color: #4CAF50; text-transform: uppercase; letter-spacing: 0.3px; }
-    .job-card-badge { font-size: 0.6rem; padding: 2px 10px; border-radius: 20px; font-weight: 600; background: #e8f5e9; color: #2e7d32; }
-    .job-card-title { font-size: 1rem; font-weight: 600; color: #1a1a2e; margin: 4px 0 6px 0; line-height: 1.3; }
-    .job-card-title a { color: #1a1a2e; text-decoration: none; }
-    .job-card-title a:hover { color: #4CAF50; }
-    .job-card-summary { font-size: 0.8rem; color: #495057; line-height: 1.5; margin: 6px 0 10px 0; flex-grow: 1; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-    .job-card-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 0.7rem; color: #6c757d; margin: 6px 0 10px 0; }
-    .job-card-meta span { display: flex; align-items: center; gap: 4px; }
-    .job-card-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; padding-top: 10px; border-top: 1px solid #f1f3f5; }
-    .job-card-score { font-weight: 700; font-size: 0.85rem; }
-    .job-card-apply { background: #4CAF50; color: white !important; padding: 5px 14px; border-radius: 6px; text-decoration: none; font-size: 0.75rem; font-weight: 600; transition: background 0.2s; }
-    .job-card-apply:hover { background: #388E3C; }
-    .dark .stApp { background: #0e1117; }
-    .dark .header { background: #1a1e27; border-color: #2d2d3d; }
-    .dark .title { color: white; }
-    .dark .stats strong { color: white; }
-    .dark .job-card { background: #1a1e27; border-color: #2d2d3d; }
-    .dark .job-card-title { color: white; }
-    .dark .job-card-title a { color: white; }
-    .dark .job-card-summary { color: #adb5bd; }
-    .dark .job-card-meta { color: #868e96; }
-    .dark .stats span { color: #868e96; }
-    @media (max-width: 768px) { .header { flex-direction: column; align-items: flex-start; } .stats { flex-wrap: wrap; } }
-</style>
-""", unsafe_allow_html=True)
+    async def close(self):
+        if self._conn:
+            await self._conn.close()
 
-# ─── DARK MODE ───
-dark_mode = st.sidebar.toggle("🌙 Dark Mode", value=st.session_state.get("dark_mode", False))
-st.session_state.dark_mode = dark_mode
-if dark_mode:
-    st.markdown('<div class="dark">', unsafe_allow_html=True)
+    async def init_schema(self):
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS jobs (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                company TEXT NOT NULL,
+                location TEXT DEFAULT 'Remote',
+                url TEXT UNIQUE NOT NULL,
+                source TEXT,
+                source_url TEXT,
+                posted_at TEXT,
+                score INTEGER DEFAULT 0,
+                ghost_score INTEGER,
+                scam_score INTEGER,
+                status TEXT DEFAULT 'new',
+                notes TEXT DEFAULT '',
+                type TEXT DEFAULT 'job',
+                salary_min INTEGER,
+                salary_max INTEGER,
+                salary_text TEXT,
+                content TEXT,
+                dedup_hash TEXT,
+                seen_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs(source);
+            CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+            CREATE INDEX IF NOT EXISTS idx_jobs_score ON jobs(score);
+            CREATE INDEX IF NOT EXISTS idx_jobs_posted ON jobs(posted_at);
+            CREATE INDEX IF NOT EXISTS idx_jobs_dedup ON jobs(dedup_hash);
+            CREATE INDEX IF NOT EXISTS idx_jobs_seen ON jobs(seen_at);
 
-# ─── DATABASE FUNCTIONS ───
-def get_db():
-    return sqlite3.connect(DB_PATH)
+            CREATE VIRTUAL TABLE IF NOT EXISTS jobs_fts USING fts5(
+                title, company, content,
+                content='jobs', content_rowid='rowid'
+            );
 
-def table_exists():
-    if not DB_PATH.exists():
-        return False
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'")
-    result = c.fetchone() is not None
-    conn.close()
-    return result
+            CREATE TABLE IF NOT EXISTS jobs_archive (
+                id TEXT PRIMARY KEY,
+                title TEXT, company TEXT, location TEXT, url TEXT,
+                source TEXT, source_url TEXT, posted_at TEXT,
+                score INTEGER, ghost_score INTEGER, scam_score INTEGER,
+                status TEXT, notes TEXT, type TEXT,
+                salary_min INTEGER, salary_max INTEGER, salary_text TEXT,
+                content TEXT, seen_at TEXT,
+                archived_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
 
-def migrate_db():
-    if not DB_PATH.exists():
-        return
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'")
-    if not c.fetchone():
-        conn.close()
-        return
-    c.execute("PRAGMA table_info(jobs)")
-    existing = [row[1] for row in c.fetchall()]
-    required = ["status", "score", "type", "seen_at", "content", "saved", "salary_min", "salary_max", "salary_text"]
-    for col in required:
-        if col not in existing:
-            c.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT DEFAULT ''")
-    conn.commit()
-    conn.close()
+            CREATE TABLE IF NOT EXISTS source_health (
+                name TEXT PRIMARY KEY,
+                url TEXT,
+                active INTEGER DEFAULT 1,
+                last_success TEXT,
+                last_failure TEXT,
+                consecutive_failures INTEGER DEFAULT 0,
+                total_jobs INTEGER DEFAULT 0,
+                avg_score REAL DEFAULT 0,
+                last_error TEXT
+            );
 
-@st.cache_data(ttl=120)
-def load_jobs():
-    if not DB_PATH.exists() or not table_exists():
-        return pd.DataFrame()
-    conn = get_db()
-    df = pd.read_sql_query("""
-        SELECT id, title, company, location, url, source,
-               score, status, type, posted_at, saved,
-               salary_min, salary_max, salary_text, content, seen_at
-        FROM jobs
-        ORDER BY score DESC
-    """, conn)
-    conn.close()
-    if df.empty:
-        return df
-    df['status'] = df['status'].fillna('new').replace('', 'new')
-    df['type'] = df['type'].fillna('job')
-    df['score'] = df['score'].fillna(0).astype(int)
-    df['seen_at'] = df['seen_at'].fillna(datetime.now().isoformat())
-    df['salary_display'] = df.apply(
-        lambda r: f"${r['salary_min']:,.0f}" if r['salary_min'] and r['salary_min'] == r['salary_max'] else
-                  f"${r['salary_min']:,.0f}-${r['salary_max']:,.0f}" if r['salary_min'] and r['salary_max'] else
-                  r['salary_text'] or "",
-        axis=1
-    )
-    df['summary'] = df['content'].fillna('').apply(
-        lambda x: (x[:180] + '...') if len(x) > 180 else x
-    )
-    return df
+            CREATE TABLE IF NOT EXISTS scrape_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT,
+                ended_at TEXT,
+                jobs_found INTEGER,
+                jobs_new INTEGER,
+                sources_checked INTEGER,
+                sources_failed INTEGER
+            );
+        """)
+        await self._conn.commit()
 
-def run_scraper():
-    with st.spinner("🔄 Fetching latest jobs..."):
-        result = subprocess.run(["python", "scripts/scraper.py"], capture_output=True, text=True)
-        if result.returncode == 0:
-            st.success("✅ Scraper finished!")
-            st.cache_data.clear()
+    async def insert_job(self, job: Job) -> bool:
+        try:
+            await self._conn.execute("""
+                INSERT INTO jobs (id, title, company, location, url, source, source_url,
+                    posted_at, score, ghost_score, scam_score, status, notes, type,
+                    salary_min, salary_max, salary_text, content, dedup_hash, seen_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                job.id, job.title, job.company, job.location, job.url,
+                job.source, job.source_url, job.posted_at.isoformat(), job.score,
+                job.ghost_score, job.scam_score, job.status.value, job.notes,
+                job.type.value, job.salary_min, job.salary_max, job.salary_text,
+                job.content, job.dedup_hash, job.seen_at.isoformat()
+            ))
+            await self._conn.execute("""
+                INSERT INTO jobs_fts(rowid, title, company, content)
+                VALUES ((SELECT rowid FROM jobs WHERE id = ?), ?, ?, ?)
+            """, (job.id, job.title, job.company, job.content))
+            await self._conn.commit()
             return True
-        st.error("❌ Scraper failed. Check the logs.")
-        return False
+        except aiosqlite.IntegrityError:
+            return False
 
-# ─── AI BLOG (Gemini) ───
-def generate_ai_blog(df):
-    try:
-        import google.generativeai as genai
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            return "⚠️ GEMINI_API_KEY not set."
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-pro')
-        top_companies = df['company'].value_counts().head(5).to_dict()
-        top_roles = df['title'].value_counts().head(5).to_dict()
-        prompt = f"Write a short blog (200 words) about remote job market trends based on: total jobs {len(df)}, top companies {top_companies}, top roles {top_roles}. Use markdown."
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"⚠️ AI blog unavailable: {e}"
+    async def get_jobs(self, filt: JobFilter) -> List[Job]:
+        params = []
+        conditions = ["1=1"]
 
-# ─── LOAD & MIGRATE ───
-migrate_db()
-df = load_jobs()
-total_jobs = len(df)
-avg_score = df['score'].mean() if not df.empty else 0
-new_count = len(df[df['status'] == 'new']) if not df.empty else 0
+        if filt.source:
+            conditions.append("source = ?")
+            params.append(filt.source)
+        if filt.job_type:
+            conditions.append("type = ?")
+            params.append(filt.job_type.value)
+        if filt.min_score > 0:
+            conditions.append("score >= ?")
+            params.append(filt.min_score)
+        if filt.saved_only:
+            conditions.append("status = 'saved'")
+        if filt.status:
+            conditions.append("status = ?")
+            params.append(filt.status.value)
 
-# ─── HEADER ───
-st.markdown(f"""
-<div class="header">
-    <div class="header-left">
-        <div class="logo">❤️</div>
-        <div>
-            <div class="title">Remote <span>Lover</span></div>
-            <div class="subtitle">🌍 Remote jobs · No geo‑restrictions</div>
-        </div>
-    </div>
-    <div class="stats">
-        <span>📊 <strong>{total_jobs}</strong> jobs</span>
-        <span>🆕 <strong>{new_count}</strong> new</span>
-        <span>⭐ <strong>{avg_score:.1f}</strong> avg score</span>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+        if filt.search:
+            conditions.append("(jobs.rowid IN (SELECT rowid FROM jobs_fts WHERE jobs_fts MATCH ?) OR title LIKE ? OR company LIKE ?)")
+            params.extend([filt.search, f"%{filt.search}%", f"%{filt.search}%"])
 
-# ─── SIDEBAR ───
-with st.sidebar:
-    st.header("🔍 Filters")
-    status_filter = st.multiselect("Status", ["new","viewed","applied","interview","offer","rejected"], default=["new","viewed","applied"])
-    min_score = st.slider("⭐ Min Score", 0, 100, 0)
-    job_type = st.multiselect("Type", ["job","task"], default=["job","task"])
-    date_range = st.selectbox("Date Range", ["All","7 days","30 days","90 days"], index=0)
-    search = st.text_input("🔎 Search")
-    sort_by = st.selectbox("Sort by", ["Highest Score","Most Recent","Easiest First"], index=0)
-    st.markdown("---")
-    if st.button("🔄 Refresh Jobs", use_container_width=True):
-        if run_scraper():
-            st.rerun()
-    if st.button("📥 Export CSV", use_container_width=True):
-        csv = df.to_csv(index=False)
-        st.download_button("Download", csv, "jobs.csv", "text/csv")
-    st.markdown("---")
-    st.caption("❤️ Remote Lover · v6.0")
+        order_col = "score" if filt.sort_by == "score" else "posted_at" if filt.sort_by == "posted_at" else "seen_at"
+        order_dir = "DESC" if filt.sort_order == "desc" else "ASC"
 
-# ─── FILTER DATA ───
-if df.empty:
-    st.warning("📭 No jobs found. Run the scraper first.")
-    if st.button("🚀 Run Scraper Now"):
-        run_scraper()
-        st.rerun()
-    st.stop()
+        query = f"""
+            SELECT * FROM jobs 
+            WHERE {' AND '.join(conditions)}
+            ORDER BY {order_col} {order_dir}
+            LIMIT ? OFFSET ?
+        """
+        params.extend([filt.limit, filt.offset])
 
-filtered = df.copy()
-if status_filter: filtered = filtered[filtered['status'].isin(status_filter)]
-if min_score: filtered = filtered[filtered['score'] >= min_score]
-if job_type: filtered = filtered[filtered['type'].isin(job_type)]
-if date_range != "All":
-    days = int(date_range.split()[0])
-    cutoff = datetime.now() - timedelta(days=days)
-    filtered = filtered[pd.to_datetime(filtered['seen_at'], errors='coerce') >= cutoff]
-if search:
-    filtered = filtered[
-        filtered['title'].str.lower().str.contains(search.lower(), na=False) |
-        filtered['company'].str.lower().str.contains(search.lower(), na=False)
-    ]
-if sort_by == "Highest Score": filtered = filtered.sort_values('score', ascending=False)
-elif sort_by == "Most Recent": filtered = filtered.sort_values('seen_at', ascending=False)
-else: filtered = filtered.sort_values(['type', 'score'], ascending=[True, False])
+        async with self._conn.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+            return [self._row_to_job(row) for row in rows]
 
-total_filtered = len(filtered)
-total_pages = max(1, (total_filtered + PAGE_SIZE - 1) // PAGE_SIZE)
-page = st.number_input("Page", min_value=1, max_value=total_pages, value=1, step=1)
-start_idx = (page - 1) * PAGE_SIZE
-end_idx = min(start_idx + PAGE_SIZE, total_filtered)
-page_df = filtered.iloc[start_idx:end_idx]
-st.caption(f"Showing {len(page_df)} of {total_filtered} jobs (Page {page}/{total_pages})")
+    async def get_job(self, job_id: str) -> Optional[Job]:
+        async with self._conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)) as cursor:
+            row = await cursor.fetchone()
+            return self._row_to_job(row) if row else None
 
-# ─── JOB CARDS ───
-if not page_df.empty:
-    cols = st.columns(3)
-    for idx, (_, job) in enumerate(page_df.iterrows()):
-        with cols[idx % 3]:
-            score = job.get('score', 0)
-            score_color = "#4CAF50" if score >= 70 else "#FF9800" if score >= 40 else "#f44336"
-            st.markdown(f"""
-            <div class="job-card">
-                <div class="job-card-header">
-                    <span class="job-card-company">{job.get('company', 'Unknown')}</span>
-                    <span class="job-card-badge">{job.get('type', 'job').upper()}</span>
-                </div>
-                <div class="job-card-title">
-                    <a href="{job.get('url', '#')}" target="_blank">{job.get('title', 'Untitled')}</a>
-                </div>
-                <div class="job-card-summary">{job.get('summary', '')}</div>
-                <div class="job-card-meta">
-                    <span>📍 {job.get('location', 'Remote')}</span>
-                    <span>💰 {job.get('salary_display', 'N/A')}</span>
-                    <span>📡 {job.get('source', '')}</span>
-                </div>
-                <div class="job-card-footer">
-                    <div class="job-card-score" style="color:{score_color}">⭐ {score}</div>
-                    <a href="{job.get('url', '#')}" target="_blank" class="job-card-apply">Apply →</a>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-else:
-    st.info("No jobs match your filters.")
+    async def update_job_status(self, job_id: str, status: JobStatus, notes: Optional[str] = None):
+        updates = ["status = ?"]
+        params = [status.value]
+        if notes is not None:
+            updates.append("notes = ?")
+            params.append(notes)
+        params.append(job_id)
+        await self._conn.execute(f"UPDATE jobs SET {', '.join(updates)} WHERE id = ?", params)
+        await self._conn.commit()
 
-# ─── AI BLOG EXPANDER ───
-with st.expander("📝 AI Job Market Blog", expanded=False):
-    if st.button("Generate Blog"):
-        with st.spinner("Thinking..."):
-            blog = generate_ai_blog(df)
-            st.markdown(blog)
+    async def archive_old_jobs(self, days: int = 90):
+        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        await self._conn.execute("""
+            INSERT OR IGNORE INTO jobs_archive 
+            SELECT *, CURRENT_TIMESTAMP FROM jobs WHERE seen_at < ?
+        """, (cutoff,))
+        await self._conn.execute("DELETE FROM jobs WHERE seen_at < ?", (cutoff,))
+        await self._conn.commit()
 
-# ─── ARCHIVED JOBS EXPANDER ───
-with st.expander("📦 Archived Jobs (90+ days old)", expanded=False):
-    conn = get_db()
-    archived_df = pd.read_sql_query("SELECT title, company, location, posted_at, archived_at FROM jobs_archive LIMIT 100", conn)
-    conn.close()
-    if not archived_df.empty:
-        st.dataframe(archived_df, use_container_width=True)
-    else:
-        st.info("No archived jobs yet.")
+    async def get_stats(self) -> Stats:
+        async with self._conn.execute("SELECT COUNT(*) FROM jobs") as c:
+            total = (await c.fetchone())[0]
+        async with self._conn.execute("SELECT COUNT(*) FROM jobs WHERE date(seen_at) = date('now')") as c:
+            new_today = (await c.fetchone())[0]
+        async with self._conn.execute("SELECT AVG(score) FROM jobs") as c:
+            avg = (await c.fetchone())[0] or 0
+        async with self._conn.execute("SELECT COUNT(*) FROM jobs WHERE status = 'saved'") as c:
+            saved = (await c.fetchone())[0]
+        async with self._conn.execute("SELECT COUNT(*) FROM source_health WHERE active = 1") as c:
+            active_src = (await c.fetchone())[0]
+        async with self._conn.execute("SELECT COUNT(*) FROM source_health") as c:
+            total_src = (await c.fetchone())[0]
+        async with self._conn.execute("""
+            SELECT source, COUNT(*) as cnt, AVG(score) as avg_sc 
+            FROM jobs GROUP BY source ORDER BY cnt DESC LIMIT 5
+        """) as c:
+            top = [{"source": r[0], "count": r[1], "avg_score": round(r[2] or 0, 1)} for r in await c.fetchall()]
 
-# ─── FOOTER ───
-st.markdown("---")
-st.caption(f"❤️ Remote Lover · Updated: {datetime.now().strftime('%H:%M:%S')}")
+        return Stats(
+            total_jobs=total, new_today=new_today, avg_score=round(avg, 1),
+            top_sources=top, saved_count=saved,
+            sources_active=active_src, sources_total=total_src
+        )
 
-if dark_mode:
-    st.markdown('</div>', unsafe_allow_html=True)
+    async def update_source_health(self, name: str, success: bool, jobs_found: int = 0,
+                                   avg_score: float = 0, url: Optional[str] = None, error: Optional[str] = None):
+        now = datetime.utcnow().isoformat()
+        if success:
+            await self._conn.execute("""
+                INSERT INTO source_health (name, url, active, last_success, consecutive_failures, total_jobs, avg_score)
+                VALUES (?, ?, 1, ?, 0, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    url = COALESCE(EXCLUDED.url, source_health.url),
+                    active = 1,
+                    last_success = EXCLUDED.last_success,
+                    consecutive_failures = 0,
+                    total_jobs = source_health.total_jobs + EXCLUDED.total_jobs,
+                    avg_score = ((source_health.avg_score * source_health.total_jobs) + (? * ?)) / 
+                                MAX(source_health.total_jobs + ?, 1),
+                    last_error = NULL
+            """, (name, url, now, jobs_found, avg_score, avg_score, jobs_found, jobs_found))
+        else:
+            await self._conn.execute("""
+                INSERT INTO source_health (name, url, active, last_failure, consecutive_failures, last_error)
+                VALUES (?, ?, 1, ?, 1, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    url = COALESCE(EXCLUDED.url, source_health.url),
+                    last_failure = EXCLUDED.last_failure,
+                    consecutive_failures = source_health.consecutive_failures + 1,
+                    active = CASE WHEN source_health.consecutive_failures >= 4 THEN 0 ELSE source_health.active END,
+                    last_error = EXCLUDED.last_error
+            """, (name, url, now, error))
+        await self._conn.commit()
+
+    async def get_source_health(self) -> List[SourceHealth]:
+        async with self._conn.execute("SELECT * FROM source_health ORDER BY name") as c:
+            rows = await c.fetchall()
+            return [SourceHealth(
+                name=r["name"], url=r["url"], active=bool(r["active"]),
+                last_success=datetime.fromisoformat(r["last_success"]) if r["last_success"] else None,
+                last_failure=datetime.fromisoformat(r["last_failure"]) if r["last_failure"] else None,
+                consecutive_failures=r["consecutive_failures"],
+                total_jobs=r["total_jobs"], avg_score=r["avg_score"],
+                last_error=r["last_error"]
+            ) for r in rows]
+
+    async def log_scrape(self, jobs_found: int, jobs_new: int, sources_checked: int, sources_failed: int):
+        now = datetime.utcnow().isoformat()
+        await self._conn.execute("""
+            INSERT INTO scrape_log (started_at, ended_at, jobs_found, jobs_new, sources_checked, sources_failed)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (now, now, jobs_found, jobs_new, sources_checked, sources_failed))
+        await self._conn.commit()
+
+    async def get_recent_logs(self, limit: int = 10) -> List[dict]:
+        async with self._conn.execute(
+            "SELECT * FROM scrape_log ORDER BY id DESC LIMIT ?", (limit,)
+        ) as c:
+            rows = await c.fetchall()
+            return [dict(r) for r in rows]
+
+    def _row_to_job(self, row: aiosqlite.Row) -> Job:
+        data = dict(row)
+        data["posted_at"] = datetime.fromisoformat(data["posted_at"])
+        data["seen_at"] = datetime.fromisoformat(data["seen_at"])
+        data["status"] = JobStatus(data["status"])
+        data["type"] = JobType(data["type"])
+        return Job(**data)
