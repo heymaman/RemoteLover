@@ -29,7 +29,7 @@ def random_headers():
         "User-Agent": random.choice(USER_AGENTS),
         "Accept": "application/json, text/html, */*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Encoding": "gzip, deflate",
         "Connection": "keep-alive",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache"
@@ -139,6 +139,8 @@ def calculate_score(job: Dict[str, Any]) -> int:
     # Recency bonus
     posted = job.get("posted_at")
     if posted and isinstance(posted, datetime):
+        if posted.tzinfo:
+            posted = posted.replace(tzinfo=None)
         days = (datetime.utcnow() - posted).days
         if days <= 1:
             score += 15
@@ -1116,6 +1118,22 @@ class Scraper:
             elif isinstance(result, Exception):
                 source_counts[name] = 0
                 errors.append(f"{name}: {str(result)}")
+        
+        # _clean_nan_marker: JobSpy/pandas leave NaN floats in empty cells; clean them up
+        cleaned = []
+        for job in jobs_to_process:
+            for key in ('title', 'company', 'location', 'url', 'source_url', 'content'):
+                if not isinstance(job.get(key), str):
+                    job[key] = ''
+            for key in ('salary_min', 'salary_max'):
+                v = job.get(key)
+                if isinstance(v, float) and v != v:
+                    job[key] = None
+            if not isinstance(job.get('salary_text'), (str, type(None))):
+                job['salary_text'] = None
+            if job['title'] and job['url']:
+                cleaned.append(job)
+        jobs_to_process = cleaned
         
         # Process with Kimi K2
         if self.kimi and jobs_to_process:
