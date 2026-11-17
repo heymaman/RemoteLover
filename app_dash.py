@@ -11,6 +11,7 @@ Remote Lover – AI‑Enhanced Job Board (v5)
 """
 
 import dash
+import html as html_stdlib
 from dash import dcc, html, Input, Output, State, callback, no_update
 import dash_bootstrap_components as dbc
 import pandas as pd
@@ -20,7 +21,6 @@ import subprocess
 import sys
 import os
 import re
-import html
 from datetime import datetime, timedelta
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -33,7 +33,7 @@ PAGE_SIZE = 12
 def clean_html(text: str) -> str:
     if not text:
         return ""
-    text = html.unescape(text)
+    text = html_stdlib.unescape(text)
     text = re.sub(r'<[^>]+>', ' ', text)
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
