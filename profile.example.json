@@ -1,0 +1,27 @@
+{
+  "name": "Your Name",
+  "email": "you@example.com",
+  "location": "Nigeria (WAT, UTC+1)",
+  "links": ["https://github.com/heymaman"],
+  "headline": "remote customer support and admin professional",
+  "strengths": {
+    "customer_support": [
+      "Fast, clear written communication with customers",
+      "Comfortable with ticketing tools and live chat"
+    ],
+    "virtual_assistant": [
+      "Reliable with scheduling, inbox management and data entry",
+      "Quick to learn new tools"
+    ],
+    "data_ops": [
+      "Accurate and detail-oriented on repetitive tasks",
+      "Consistent output on deadlines"
+    ],
+    "default": [
+      "Dependable, self-managed and used to working asynchronously",
+      "Quick to learn new tools"
+    ]
+  },
+  "availability": "Available full-time, with overlap into US and European hours",
+  "closing_ask": "Would you be open to a short chat this week?"
+}

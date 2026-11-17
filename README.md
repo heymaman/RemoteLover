@@ -32,3 +32,16 @@ python app_dash.py          # open the dashboard
 ## Configuration
 
 See `.env.example`. Sources that need a key (X, Google via SerpAPI) are skipped when it is missing; without `KIMI_API_KEY` jobs use rule-based scoring.
+
+## Cold-email drafts (human-in-the-loop)
+
+`outreach.py` writes a personalised draft for each top-scoring job. It never sends anything: you review, add the recipient and send from your own mail.
+
+```bash
+cp profile.example.json profile.json      # fill in your details (git-ignored)
+python run.py --niche customer_support    # collect jobs first
+python outreach.py --niche customer_support --min-score 60 --limit 10
+python outreach.py --llm                  # optional: polish with Kimi (KIMI_API_KEY)
+```
+
+Drafts go to `outreach/drafts/` with an `outreach/index.csv` tracker. Only emails published in the job posting itself are filled in as recipients; otherwise the draft says where to look. Already-drafted jobs are skipped.
