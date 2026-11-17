@@ -1,4 +1,4 @@
-import httpx
+﻿import httpx
 import asyncio
 import random
 import hashlib
@@ -14,7 +14,7 @@ from config import get_settings
 
 settings = get_settings()
 
-# ─── USER AGENTS ──────────────────────────────────────────────────────────────
+# â”€â”€â”€ USER AGENTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
@@ -35,7 +35,7 @@ def random_headers():
         "Pragma": "no-cache"
     }
 
-# ─── HELPERS ──────────────────────────────────────────────────────────────────
+# â”€â”€â”€ HELPERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def normalize_date(date_str) -> datetime:
     """Normalize various date formats to datetime."""
@@ -88,7 +88,7 @@ def compute_dedup_hash(title: str, company: str, location: str) -> str:
     normalized = f"{title.lower().strip()}|{company.lower().strip()}|{location.lower().strip()}"
     return hashlib.md5(normalized.encode()).hexdigest()[:16]
 
-# ─── SCORING ──────────────────────────────────────────────────────────────────
+# â”€â”€â”€ SCORING â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 GLOBAL_FRIENDLY = [
     "gitlab", "stripe", "figma", "notion", "linear", "supabase", "airbnb", "vercel", "railway",
@@ -181,7 +181,7 @@ def calculate_score(job: Dict[str, Any]) -> int:
 
     return max(0, min(100, score))
 
-# ─── KIMI K2 CLIENT ──────────────────────────────────────────────────────────
+# â”€â”€â”€ KIMI K2 CLIENT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @dataclass
 class KimiK2Client:
@@ -460,7 +460,7 @@ Company: {company_name}"""
         
         return job
 
-# ─── SCRAPER ─────────────────────────────────────────────────────────────────
+# â”€â”€â”€ SCRAPER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class Scraper:
     """Base scraper with async fetchers."""
@@ -563,7 +563,7 @@ class Scraper:
         
         return result
     
-    # ─── FETCHERS ────────────────────────────────────────────────────────────
+    # â”€â”€â”€ FETCHERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     
     async def fetch_remoteok(self) -> List[Dict]:
         """Fetch jobs from RemoteOK."""
@@ -1118,6 +1118,18 @@ class Scraper:
             elif isinstance(result, Exception):
                 source_counts[name] = 0
                 errors.append(f"{name}: {str(result)}")
+
+        # --- SerpAPI Google Jobs (isolated) ---
+        try:
+            _serp_query = locals().get("serp_query") or "customer support"
+            _serp_jobs = fetch_serpapi_google_jobs(query=_serp_query, location="United States", limit=20)
+            jobs_to_process.extend(_serp_jobs)
+            source_counts["serpapi_google"] = len(_serp_jobs)
+            print(f"  serpapi_google    {len(_serp_jobs)}")
+        except Exception as e:
+            errors.append(f"serpapi: {e}")
+            source_counts["serpapi_google"] = 0
+
         
         # _clean_nan_marker: JobSpy/pandas leave NaN floats in empty cells; clean them up
         cleaned = []
@@ -1172,3 +1184,45 @@ class Scraper:
         # Sort by score descending
         sorted_jobs = sorted(result.jobs, key=lambda j: j.score, reverse=True)
         return sorted_jobs[:limit]
+
+# === SerpAPI Google Jobs (isolated source) ===
+def fetch_serpapi_google_jobs(query: str, location: str = "United States", limit: int = 20) -> List[Dict[str, Any]]:
+    """Standalone SerpAPI Google Jobs fetcher. Returns [] if key missing or on error."""
+    import os
+    api_key = os.getenv("SERPAPI_KEY")
+    if not api_key:
+        print("SerpAPI skipped: SERPAPI_KEY not set")
+        return []
+
+    try:
+        from serpapi import GoogleSearch
+        results = GoogleSearch({
+            "api_key": api_key,
+            "engine": "google_jobs",
+            "q": query,
+            "location": location,
+            "hl": "en",
+            "gl": "us",
+        }).get_dict()
+    except Exception as e:
+        print(f"SerpAPI error: {e}")
+        return []
+
+    if "error" in results:
+        print(f"SerpAPI error: {results['error']}")
+        return []
+
+    jobs = []
+    for item in results.get("jobs_results", [])[:limit]:
+        links = item.get("related_links") or [{}]
+        jobs.append({
+            "title": item.get("title", ""),
+            "company": item.get("company_name", ""),
+            "location": item.get("location", ""),
+            "url": links[0].get("link", ""),
+            "description": item.get("description", ""),
+            "source": "serpapi_google",
+            "via": item.get("via", ""),
+            "posted_at": None,
+        })
+    return jobs
